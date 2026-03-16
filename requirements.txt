@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-dotenv
+requests
+psycopg2-binary
+chromadb
+groq
+google-generativeai
+openai
+firecrawl-py
+supabase
+langchain
+langchain-community
+langchain-openai
+langchain-groq
+langchain-google-genai

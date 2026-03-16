@@ -1,0 +1,92 @@
+# === SYSTEM JUNK ===
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*.swp
+desktop.ini
+$RECYCLE.BIN/
+
+# === LOGS & CACHE ===
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+.stylelintcache
+.npm/
+.cache/
+.parcel-cache/
+.next/
+.turbo/
+
+# === TESTING ===
+test/
+tests/
+__tests__/
+*.test.*
+*.spec.*
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# === PYTHON ===
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+.env.local
+.env.*.local
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === NODE / FRONTEND ===
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist-ssr/
+*.local
+
+# === DATABASE & DATA ===
+vector_db/
+*.db
+*.sqlite
+*.sqlite3
+data/*.json
+!data/.keep
+
+# === IDE ===
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# === DOCUMIND SPECIFIC ===
+backend/venv/
+backend/__pycache__/
+scraping_hub/__pycache__/
+database/__pycache__/
+/tmp/
+/temp/
