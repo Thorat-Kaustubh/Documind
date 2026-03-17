@@ -27,6 +27,17 @@ tests/
 __tests__/
 *.test.*
 *.spec.*
+test_*.py
+test_*.json
+test_*.txt
+*test_results*
+verify_*.py
+verify_*.*
+debug_*.py
+debug_*.*
+verify_system_health.py
+performance_report.json
+list_gemini_models.py
 .pytest_cache/
 .tox/
 .coverage

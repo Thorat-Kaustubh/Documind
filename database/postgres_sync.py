@@ -10,7 +10,11 @@ class PostgresSync:
         self.connection_url = connection_url or os.getenv("POSTGRES_URL")
         self.conn = None
         if self.connection_url:
-            self.conn = psycopg2.connect(self.connection_url)
+            try:
+                self.conn = psycopg2.connect(self.connection_url)
+            except Exception as e:
+                print(f"Warning: Could not connect to Postgres: {e}")
+                self.conn = None
 
     def initialize_schema(self):
         if not self.conn:
