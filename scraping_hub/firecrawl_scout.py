@@ -1,24 +1,59 @@
 import os
+import requests
 from firecrawl import FirecrawlApp
+from bs4 import BeautifulSoup
 from typing import List, Dict, Any
 
 class FirecrawlScout:
     """
-    Enhanced Firecrawl Scout: Incorporates Search, Scrape, and CRAWL.
-    Optimized for high-depth financial discovery (NSE, BSE, Screener).
+    Credit-Aware Firecrawl Scout.
+    Saves Firecrawl credits by using local requests as a fallback for simple sites.
     """
     def __init__(self):
         self.api_key = os.getenv("FIRECRAWL_API_KEY")
         if not self.api_key or "your_firecrawl" in self.api_key:
-            print("⚠️ Firecrawl API Key missing. Scraping will be disabled.")
             self.app = None
         else:
             self.app = FirecrawlApp(api_key=self.api_key)
 
-    def search_and_scrape(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+    def scrape_surgical(self, url: str) -> Dict[str, Any]:
+        """
+        Only use this for complex JS-heavy sites like NSE/BSE or Screener.in.
+        Uses 1 Firecrawl Credit.
+        """
+        if not self.app:
+            return self.scrape_free(url)
+            
+        try:
+            print(f"💎 Surgical Extraction (Using Credit): {url}")
+            return self.app.scrape_url(url, {'formats': ['markdown']})
+        except Exception as e:
+            print(f"⚠️ Firecrawl failed, falling back to free: {e}")
+            return self.scrape_free(url)
+
+    def scrape_free(self, url: str) -> Dict[str, Any]:
+        """
+        Free Fallback using Requests + BeautifulSoup.
+        Uses 0 Credits. Good for basic news sites.
+        """
+        print(f"🧊 Free Extraction: {url}")
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Simple text extraction
+            text = ' '.join([p.get_text() for p in soup.find_all('p')])
+            return {"markdown": text[:10000], "metadata": {"source": "free_fallback"}}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def search_and_scrape(self, query: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """Limited search to save credits."""
         if not self.app: return []
         try:
-            print(f"🛰️ Searching Web: {query}...")
+            print(f"🛰️ Surgical Search: {query}...")
+            # We limit to 1 result to be extremely frugal with credits
             results = self.app.search(query, {
                 'limit': limit,
                 'scrapeOptions': {'formats': ['markdown'], 'onlyMainContent': True}
@@ -27,33 +62,3 @@ class FirecrawlScout:
         except Exception as e:
             print(f"❌ Search Error: {e}")
             return []
-
-    def deep_crawl_site(self, base_url: str, max_pages: int = 5):
-        """
-        Uses Firecrawl 'Crawl' to go deep into a financial portal (NSE/BSE).
-        Filters only for main content to save tokens.
-        """
-        if not self.app: return None
-        try:
-            print(f"🕸️ Deep Crawling: {base_url} (Max: {max_pages} pages)")
-            crawl_status = self.app.crawl_url(
-                base_url,
-                params={
-                    'limit': max_pages,
-                    'scrapeOptions': {
-                        'formats': ['markdown'],
-                        'onlyMainContent': True
-                    }
-                }
-            )
-            return crawl_status
-        except Exception as e:
-            print(f"❌ Crawl Error: {e}")
-            return None
-
-    def scrape_url(self, url: str) -> Dict[str, Any]:
-        if not self.app: return {}
-        try:
-            return self.app.scrape_url(url, {'formats': ['markdown']})
-        except Exception as e:
-            return {"error": str(e)}

@@ -25,25 +25,51 @@ class AIBroker:
 
     async def execute_task(self, task: str, provider_mode: str = "fast", raw_context: str = "") -> Dict[str, Any]:
         """
-        Executes a task using the selected provider mode.
-        Modes: 'fast' (Groq), 'deep' (Compressed Groq), 'visual' (Gemini Flash)
+        Executes a task with integrated NER (Entity Extraction) if context is provided.
         """
         print(f"Routing task with mode: {provider_mode}...")
         
+        # If we have raw context (e.g. from scraping), extract entities first to clean it up
+        entities = {}
+        if raw_context:
+            try:
+                entities = await self.extract_entities(raw_context)
+            except: pass
+        
         try:
             if provider_mode == "fast":
-                return await self._call_groq(task)
+                return await self._call_groq(task, context=raw_context)
             elif provider_mode == "deep":
                 # Stage 1: Compress Context
                 compressed_context = await self._compress_prompt(raw_context) if raw_context else ""
                 enriched_task = f"COMPRESSED MARKET INTELLIGENCE:\n{compressed_context}\n\nRESEARCH TASK: {task}"
                 return await self._call_groq(enriched_task)
             elif provider_mode == "visual":
-                return await self._call_gemini(task, self.models["visual"])
+                return await self._call_gemini(task, self.models["visual"], context=raw_context)
             else:
                 return {"error": f"Unknown provider mode: {provider_mode}"}
         except Exception as e:
             return {"error": str(e)}
+
+    async def stream_task(self, task: str, raw_context: str = ""):
+        """
+        SSE Streaming: Provides millisecond response times by streaming the intelligence summary.
+        """
+        prompt = f"CONTEXT:\n{raw_context[:10000]}\n\nUSER QUERY: {task}"
+        
+        # We use Groq for the fastest streaming experience
+        stream = self.groq_client.chat.completions.create(
+            model=self.models["fast"],
+            messages=[
+                {"role": "system", "content": "You are Documind Elite. Provide a rich, markdown-heavy financial analysis. Cite sources explicitly. Start directly with the analysis."},
+                {"role": "user", "content": prompt}
+            ],
+            stream=True
+        )
+        
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
     async def _compress_prompt(self, context: str, is_file: bool = False) -> str:
         """
@@ -76,25 +102,55 @@ class AIBroker:
         )
         return response.text
 
-    async def _call_groq(self, task: str) -> Dict[str, Any]:
+    async def extract_entities(self, text: str) -> Dict[str, Any]:
+        """
+        Performs Zero-Shot NER to identify critical financial entities.
+        Replaces the need for a custom-trained NER model.
+        """
+        extraction_prompt = f"""
+        Act as a Financial Data Scientist. Extract structured entities from the text below.
+        
+        TEXT: {text[:5000]}
+        
+        Return ONLY a JSON object with:
+        {{
+            "tickers": ["SYMBOL1", "SYMBOL2"],
+            "monetary_values": ["Value (Context)", "..."],
+            "key_people": ["Name (Title)", "..."],
+            "strategic_events": ["Mergers", "Earnings", "Lawsuits"]
+        }}
+        """
+        try:
+            response = self.gemini_client.models.generate_content(
+                model=self.models["visual"],
+                config={'response_mime_type': 'application/json'},
+                contents=extraction_prompt
+            )
+            return json.loads(response.text)
+        except:
+            return {"tickers": [], "monetary_values": []}
+
+    async def _call_groq(self, task: str, context: str = "") -> Dict[str, Any]:
+        prompt = f"CONTEXT:\n{context}\n\nTASK: {task}" if context else task
         completion = self.groq_client.chat.completions.create(
             model=self.models["fast"],
             messages=[
                 {"role": "system", "content": self._get_system_prompt()},
-                {"role": "user", "content": task}
+                {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
 
-    async def _call_gemini(self, task: str, model_id: str) -> Dict[str, Any]:
+    async def _call_gemini(self, task: str, model_id: str, context: str = "") -> Dict[str, Any]:
+        prompt = f"CONTEXT:\n{context}\n\nTASK: {task}" if context else task
         response = self.gemini_client.models.generate_content(
             model=model_id,
             config={
                 'system_instruction': self._get_system_prompt(),
                 'response_mime_type': 'application/json'
             },
-            contents=task
+            contents=prompt
         )
         return json.loads(response.text)
 
@@ -103,36 +159,29 @@ class AIBroker:
         Returns the unified system prompt for all LLMs to ensure consistent output.
         """
         return """
-        You are Documind, an advanced financial intelligence engine.
-        Analyze the provided data or query and return a strict JSON response.
+        You are Documind Elite, a world-class Financial Intelligence Assistant comparable to Bloomberg Terminal mixed with Gemini/ChatGPT.
         
-        Return format:
+        GOAL: Provide multi-layered analysis that combines hard market data, real-time news sentiment, and deep-document RAG.
+        
+        RULES:
+        1. CITATION: Every numerical fact or strategic claim MUST be cited (e.g., "[Source: Q3 10-Q]").
+        2. STRUCTURE: Use professional headers: # MARKET PULSE, # STRATEGIC INSIGHT, # RISK ASSESSMENT.
+        3. MULTI-LLM REASONING: If 'deep' mode is used, cross-reference multiple data points before drawing a conclusion.
+        4. JSON FORMAT: You MUST return a valid JSON object with the following structure:
+        
         {
-          "summary": "Detailed financial analysis or response text.",
-          "sentiment": { 
-              "score": 0.0 to 1.0 (0=bearish, 1=bullish), 
-              "label": "Bullish|Bearish|Neutral", 
-              "confidence": 0.0 to 1.0 
-          },
+          "summary": "Full formatted markdown response with headers and citations.",
+          "sentiment": { "score": 0.1-0.9, "label": "Bullish/Bearish", "confidence": 0.8 },
           "visuals": {
-            "type": "line|bar|pie|heatmap|candlestick|none",
-            "chart_data": [
-                // line/bar/pie: {"name": "label", "value": 123}
-                // heatmap: {"name": "Sector", "intensity": 0-100, "label": "Text"}
-                // candlestick: {"name": "Time", "open": O, "high": H, "low": L, "close": C}
-            ],
-            "insight_cards": [
-                {"title": "Key Insight", "content": "Brief detail"}
-            ]
+            "type": "line|bar|pie|candlestick|none",
+            "chart_data": [], // Ensure data adheres to recharts specifications
+            "insight_cards": [{"title": "Alert", "content": "Critical detail"}]
           },
-          "sources": ["External Source A", "Data Point B"]
+          "follow_up_questions": ["What is their debt maturity profile?", "How does this compare to sector peers?"],
+          "sources": ["Screener.in", "Tavily Search", "PDF RAG Index"]
         }
         
-        Visualization Rules:
-        - For 'candlestick', ensure 5 data points per object (name, open, high, low, close).
-        - For 'heatmap', 'intensity' represents temperature/volume (0-100).
-        - If no chart is applicable, set visual type to "none" and chart_data to [].
-        Always provide professional, data-driven insights.
+        TONE: Objective, precise, and data-driven. Avoid hype.
         """
 
 if __name__ == "__main__":

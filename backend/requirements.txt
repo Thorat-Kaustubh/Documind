@@ -16,3 +16,5 @@ langchain-google-genai
 pypdf
 pandas
 python-multipart
+yfinance
+tavily-python

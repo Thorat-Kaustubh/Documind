@@ -79,6 +79,8 @@ frontend/node_modules/
 frontend/dist/
 dist-ssr/
 *.local
+package.json
+package-lock.json
 
 # === DATABASE & DATA ===
 vector_db/
@@ -101,3 +103,4 @@ scraping_hub/__pycache__/
 database/__pycache__/
 /tmp/
 /temp/
+*.md
