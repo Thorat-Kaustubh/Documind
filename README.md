@@ -59,11 +59,26 @@ graph TD
 
 ## 🛠️ Tech Stack
 
-- **Backend**: Python 3.10+, FastAPI (Asynchronous Orchestration), Celery (Background Processing).
-- **LLM Orchestration**: LangChain, CrewAI, Custom Multi-LLM Broker (`ai_broker.py`).
-- **Database & Memory**: **PostgreSQL (Supabase)** for metrics, **ChromaDB** for vector memory.
-- **Scraping Fleet**: Firecrawl API, modular Scrapy agents.
-- **Frontend**: React, Tailwind CSS, Framer Motion, Recharts.
+- **🤖 Intelligence Layers**: 
+  - **Gemini 3.1 Pro / 3 Flash** (Massive Context & Historical Synthesis)
+  - **Llama 3.3 via Groq** (Sub-100ms Intent Prediction & Sentiment)
+  - **GPT-4o** (Complex logical reasoning & Final Lead Analysis)
+- **🧠 Agentic Orchestration**: 
+  - **CrewAI** & **LangChain** for autonomous workflow management
+  - **Semantic Prompt Compression** for token-efficient memory recall
+- **🕸️ Research & Extraction**: 
+  - **Tavily Search API** for real-time web grounding
+  - **Firecrawl** for advanced JavaScript-heavy page to Markdown conversion
+- **📦 Backend & Infrastructure**: 
+  - **FastAPI** (Asynchronous Python core)
+  - **Celery + Redis** (Background Market Pulse Monitors)
+  - **Supabase** (PostgreSQL for session state & user data)
+  - **ChromaDB** (Vector store for semantic financial memory)
+- **🎨 Frontend Experience**: 
+  - **React + Tailwind CSS** (Next-gen glassmorphism interface)
+  - **Framer Motion** (Smooth interactive transitions)
+  - **Recharts** (Dynamic financial visualization)
+  - **Streamlit** (Integrated data-heavy diagnostic dashboards)
 
 ---
 
