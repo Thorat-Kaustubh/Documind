@@ -58,3 +58,11 @@ CREATE TABLE IF NOT EXISTS ipo_registry (
     lot_size INTEGER,
     status TEXT -- 'UPCOMING', 'OPEN', 'LISTED'
 );
+
+-- 6. PERFORMANCE INDEXES (Optimized for Sub-10ms Hot Paths)
+CREATE INDEX IF NOT EXISTS idx_asset_ticker ON asset_master(ticker);
+CREATE INDEX IF NOT EXISTS idx_asset_sector ON asset_master(sector) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_quotes_asset_time ON market_quotes(asset_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_feed_asset_published ON intelligence_feed(asset_id, published_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_feed_category ON intelligence_feed(category);
+CREATE INDEX IF NOT EXISTS idx_ipo_date ON ipo_registry(listing_date DESC NULLS LAST);

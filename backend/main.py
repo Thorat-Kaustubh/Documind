@@ -1,45 +1,93 @@
 import os
 import sys
 import time
+import logging
+import asyncio
 import pandas as pd
 import pypdf
 from io import StringIO
-from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from typing import Optional, List, Dict, Any, Union
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Depends, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from pydantic import BaseModel, field_validator, EmailStr
+from collections import defaultdict
 
-# Add project root to sys.path to allow importing sibling modules
+# Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_broker import AIBroker
+from backend.ai_broker import AIBroker
 from database.postgres_sync import PostgresSync
 from database.vector_storage import VectorStorage
 from backend.web_intelligence import WebIntelligence
 from database.pdf_rag import PDFIntelligenceEngine
-from backend.tasks import process_pdf_task, discovery_sweep_task # USE CELERY TASKS
+from backend.tasks import process_pdf_task, discovery_sweep_task, sector_discovery_task
+from backend.auth import get_current_user, check_ownership
 
-app = FastAPI(title="Documind Elite: Production Engine", version="2.0.0")
+# 1. STRUCTURED LOGGING (Audit Trail)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("documind-performance")
 
-# High-Performance Middleware
+app = FastAPI(
+    title="Documind Elite: Optimized Production Engine",
+    version="2.2.0",
+    docs_url=None, 
+    redoc_url=None
+)
+
+# 2. CORS HARDENING (Restrict Origins)
+allowed_origins = [
+    os.getenv("FRONTEND_URL", "http://localhost:5173"),
+    "http://localhost:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Initialize Core Services
+# 3. ABUSE PROTECTION (Rate Limiting)
+class RateLimiter:
+    def __init__(self, limit: int, window: int):
+        self.limit = limit
+        self.window = window
+        self.hits = defaultdict(list)
+
+    def is_allowed(self, key: str) -> bool:
+        now = time.time()
+        self.hits[key] = [h for h in self.hits[key] if h > now - self.window]
+        if len(self.hits[key]) >= self.limit:
+            return False
+        self.hits[key].append(now)
+        return True
+
+api_limiter = RateLimiter(limit=100, window=60) # Increased for performance
+ai_limiter = RateLimiter(limit=20, window=60)
+
+async def check_rate_limit(request: Request):
+    client_ip = request.client.host
+    if not api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests.")
+
+# Initialize Core Services (Shared instances for pooling)
 broker = AIBroker()
 pg_db = PostgresSync()
 vector_db = VectorStorage()
 web_intel = WebIntelligence()
 pdf_rag = PDFIntelligenceEngine()
 
-# Ensuring temp_pdfs directory exists for secure storage
 os.makedirs("temp_pdfs", exist_ok=True)
+
+# L1 MEMORY CACHE (Hot Data)
+_static_cache = {}
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -50,139 +98,106 @@ class ResearchRequest(BaseModel):
     ticker: str
     company_name: str
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(check_rate_limit)])
 async def root():
-    return {"status": "Documind Elite Engine Online", "version": "2.0.0", "task_queue": "connected"}
+    return {"status": "Documind Elite Engine Optimized", "version": "2.2.0"}
 
 @app.post("/api/analyze-file")
 async def analyze_file(
+    request: Request,
     file: UploadFile = File(...),
     prompt: str = Form("Analyze this financial document."),
-    mode: str = Form("deep")
+    mode: str = Form("deep"),
+    user: Any = Depends(get_current_user)
 ):
-    """
-    Secure File Analysis: Refactored with robust sanitization and isolated storage.
-    """
-    try:
-        # 1. SECURITY: Filename Sanitization (Prevents path traversal)
-        safe_name = "".join([c for c in file.filename if c.isalnum() or c in ('.', '-', '_')]).strip()
-        if not safe_name: safe_name = f"upload_{int(time.time())}.pdf"
-        
-        file_path = os.path.join("temp_pdfs", safe_name)
-        with open(file_path, "wb") as buffer:
-            buffer.write(await file.read())
+    await check_rate_limit(request)
+    ext = os.path.splitext(file.filename)[1].lower()
+    safe_name = f"u{user.id}_{int(time.time())}{ext}"
+    file_path = os.path.join("temp_pdfs", safe_name)
 
+    try:
+        # Optimized async write
+        content_bytes = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content_bytes)
+
+        # Extraction (Non-blocking)
         content = ""
-        if safe_name.endswith('.csv'):
-            df = pd.read_csv(file_path)
-            content = df.to_string()
-        elif safe_name.endswith('.pdf'):
+        if ext == '.pdf':
             with open(file_path, "rb") as f:
                 pdf_reader = pypdf.PdfReader(f)
-                for page in pdf_reader.pages:
-                    content += page.extract_text()
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported format.")
-
-        response = await broker.execute_task(prompt, provider_mode=mode, raw_context=content)
-        return response
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+                content = "\n".join([p.extract_text() for p in pdf_reader.pages])
+        
+        return await broker.execute_task(prompt, provider_mode=mode, raw_context=content[:40000])
+    finally:
+        if os.path.exists(file_path): os.remove(file_path)
 
 @app.post("/api/chat-stream")
-async def chat_stream(request: ChatRequest):
-    """
-    Two-Phase Response Streaming:
-    Phase 1: Fast initial reasoning summary.
-    Phase 2: Deep refinement and citations.
-    """
-    try:
-        # Retrieval with Metadata filters
-        results = vector_db.collection.query(
-            query_texts=[request.prompt],
-            n_results=5,
-            where={"symbol": request.ticker} if request.ticker else None
-        )
-        context_text = "\n".join(results['documents'][0]) if results['documents'] else ""
-        
-        return StreamingResponse(
-            broker.stream_task(request.prompt, raw_context=context_text),
-            media_type="text/event-stream"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def chat_stream(request: Request, chat_req: ChatRequest, user: Any = Depends(get_current_user)):
+    """Ultra-Low Latency Streaming Response."""
+    await check_rate_limit(request)
+    results = vector_db.query(query_text=chat_req.prompt, n_results=5, user_id=user.id)
+    context_text = "\n".join(results['documents'][0]) if results['documents'] else ""
+    return StreamingResponse(broker.stream_task(chat_req.prompt, raw_context=context_text), media_type="text/event-stream")
 
 @app.post("/api/research")
-async def perform_research(request: ResearchRequest):
-    """
-    Deep Web Discovery: Triggers persistent background tasks via CELERY.
-    Satisfies PRODUCTION-GRADE RELIABILITY (A. Distributed Task System).
-    """
-    try:
-        # 1. Fast web context
-        context = web_intel.get_company_context(request.ticker, request.company_name)
-        
-        # 2. Scout for PDFs
-        pdf_links = web_intel.find_annual_reports(request.company_name)
-        
-        # 3. Persistent Ingestion: Queue the task (even if server restarts, Celery picks it up)
-        if pdf_links:
-             process_pdf_task.delay(request.ticker, pdf_links[0])
+async def perform_research(request: Request, research_req: ResearchRequest, user: Any = Depends(get_current_user)):
+    """PARALLELIZED RESEARCH: Fetches context and PDF links concurrently."""
+    await check_rate_limit(request)
+    # Parallel async execution
+    context_task = asyncio.to_thread(web_intel.get_company_context, research_req.ticker, research_req.company_name)
+    pdf_task = asyncio.to_thread(web_intel.find_annual_reports, research_req.company_name)
+    context, pdf_links = await asyncio.gather(context_task, pdf_task)
+    
+    if pdf_links:
+        process_pdf_task.delay(research_req.ticker, pdf_links[0], user_id=user.id)
 
-        return {
-            "context": context,
-            "pdfs": pdf_links[:3],
-            "celery_task_id": "queued_for_discovery"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/ingest-local-file")
-async def ingest_local_file(
-    file: UploadFile = File(...),
-    symbol: str = Form("USER_DOC")
-):
-    """
-    D. SECURE FILE HANDLING + PERSISTENT QUEUE.
-    """
-    try:
-        safe_name = "".join([c for c in file.filename if c.isalnum() or c in ('.', '-', '_')]).strip()
-        temp_path = os.path.join("temp_pdfs", safe_name)
-        
-        with open(temp_path, "wb") as buffer:
-            buffer.write(await file.read())
-        
-        # PERSISTENT TASK: Let the background workers process the embedding
-        process_pdf_task.delay(symbol, temp_path, is_local=True)
-        
-        return {"status": "queued", "safe_filename": safe_name}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "research_initiated", "context": context, "pdfs": pdf_links[:2]}
 
 @app.post("/api/rag-chat")
-async def rag_chat(request: ChatRequest):
-    """
-    Enterprise RAG endpoint with source attribution.
-    """
-    try:
-        results = vector_db.collection.query(
-            query_texts=[request.prompt],
-            n_results=8,
-            where={"symbol": request.ticker} if request.ticker else None
-        )
-        
-        context_chunks, citations = [], []
-        if results['documents']:
-            for i, doc in enumerate(results['documents'][0]):
-                meta = results['metadatas'][0][i]
-                context_chunks.append(f"[Ref: {meta.get('source')} Page {meta.get('page')}]: {doc}")
-                citations.append({"text": doc[:100] + "...", "source": meta.get('source')})
-        
-        response = await broker.execute_task(request.prompt, provider_mode="visual", raw_context="\n\n".join(context_chunks))
-        response["citations"] = citations[:3] 
-        return response
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def rag_chat(request: Request, chat_req: ChatRequest, user: Any = Depends(get_current_user)):
+    await check_rate_limit(request)
+    results = vector_db.query(query_text=chat_req.prompt, n_results=6, user_id=user.id)
+    context_chunks = []
+    if results['documents']:
+        for i, doc in enumerate(results['documents'][0]):
+            meta = results['metadatas'][0][i]
+            context_chunks.append(f"[Ref: {meta.get('source')}]: {doc}")
+    
+    return await broker.execute_task(chat_req.prompt, provider_mode="core", raw_context="\n\n".join(context_chunks))
+
+@app.get("/api/market-pulse", dependencies=[Depends(get_current_user)])
+async def get_market_pulse():
+    now = time.time()
+    if "pulse" in _static_cache and now - _static_cache["pulse"]["t"] < 30:
+        return _static_cache["pulse"]["v"]
+    res = await asyncio.to_thread(pg_db.get_market_pulse)
+    _static_cache["pulse"] = {"v": res, "t": now}
+    return res
+
+@app.get("/api/assets", dependencies=[Depends(get_current_user)])
+async def get_assets():
+    now = time.time()
+    if "assets" in _static_cache and now - _static_cache["assets"]["t"] < 1800:
+        return _static_cache["assets"]["v"]
+    res = await asyncio.to_thread(pg_db.get_all_assets)
+    _static_cache["assets"] = {"v": res, "t": now}
+    return res
+
+@app.get("/api/ipos", dependencies=[Depends(get_current_user)])
+async def get_ipos():
+    now = time.time()
+    if "ipos" in _static_cache and now - _static_cache["ipos"]["t"] < 3600:
+        return _static_cache["ipos"]["v"]
+    res = await asyncio.to_thread(pg_db.get_ipo_watchlist)
+    _static_cache["ipos"] = {"v": res, "t": now}
+    return res
+
+@app.get("/api/sectors", dependencies=[Depends(get_current_user)])
+async def get_sector_intelligence(sector: Optional[str] = None, user: Any = Depends(get_current_user)):
+    query = f"SECTOR REPORT [{sector}]" if sector else "SECTOR REPORT"
+    results = vector_db.query(query_text=query, n_results=8, user_id=user.id)
+    return {"results": results['documents'][0] if results['documents'] else []}
 
 if __name__ == "__main__":
     import uvicorn

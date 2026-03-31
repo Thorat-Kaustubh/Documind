@@ -12,18 +12,25 @@ pdf_rag = PDFIntelligenceEngine()
 web_intel = WebIntelligence()
 market_engine = MarketDataEngine()
 vector_db = VectorStorage()
+from database.postgres_sync import PostgresSync
+pg_db = PostgresSync()
+from .ai_broker import AIBroker
+broker = AIBroker()
 
 @celery_app.task(name="tasks.process_pdf_task", autoretry_for=(Exception,), retry_kwargs={'max_retries': 3, 'countdown': 30})
-def process_pdf_task(symbol: str, pdf_url: str, is_local: bool = False):
+def process_pdf_task(symbol: str, pdf_url: str, is_local: bool = False, user_id: str = None):
     """
     Background Task: Process a PDF (Download -> Chunk -> Embed -> Stores).
     Persists even if the main server crashes.
+    Now includes user_id for secure Multi-Tenancy. (Prevents IDOR).
     """
-    print(f"📦 [CELERY-WORKER] Processing PDF for {symbol}...")
-    success = pdf_rag.process_financial_pdf(symbol, pdf_url, is_local=is_local)
+    print(f"📦 [CELERY-WORKER] Processing PDF for {symbol} (User: {user_id or 'SYSTEM'})...")
+    # Note: Using'ingest_document_secure' if implemented or just passing to ingest_document
+    success = pdf_rag.process_financial_pdf(symbol, pdf_url, is_local=is_local, user_id=user_id)
     if not success:
         raise Exception(f"Failed to process PDF for {symbol}")
-    return {"status": "success", "symbol": symbol, "source": pdf_url}
+    return {"status": "success", "symbol": symbol, "source": pdf_url, "user_id": user_id}
+
 
 @celery_app.task(name="tasks.discovery_sweep", soft_time_limit=1800)
 def discovery_sweep_task(ticker_list: list):
@@ -37,15 +44,30 @@ def discovery_sweep_task(ticker_list: list):
         for ticker in ticker_list:
             # 1. Web context fetch
             web_context = web_intel.get_company_context(ticker, ticker)
+            
             # 2. Market metrics sync
             market_stats = market_engine.fetch_equity_intelligence(ticker)
             
-            payload = f"INTELLIGENCE REPORT FOR {ticker}\nMARKET DATA: {market_stats}\nWEB INSIGHTS: {web_context.get('ai_answer', '')}"
+            # 3. AI Sentiment & Summary Generation (The 'Neural Reasoning' Layer)
+            intelligence = await broker.execute_task(
+                f"Analyze the context for {ticker}. Extraction focused.",
+                provider_mode="scout",
+                raw_context=str(web_context.get('results', []))
+            )
             
-            # Sync to semantic memory
+            summary_text = intelligence.get('summary', '')
+            sentiment = intelligence.get('sentiment', {}).get('score', 0.5)
+            
+            # Hybrid Storage:
+            # A. HARD MEMORY (SQL)
+            pg_db.insert_market_quote(ticker, market_stats.get('price', 0.0), market_stats.get('change_pct', 0.0), market_stats.get('volume', 0))
+            pg_db.sync_intelligence_feed(ticker, f"Discovery Sync: {ticker}", summary_text, "Tavily/AI", sentiment)
+            
+            # B. SEMANTIC MEMORY (Vector)
+            payload = f"INTELLIGENCE REPORT: {summary_text}\nMARKET DATA: {market_stats}"
             vector_db.upsert_document(
                 text=payload,
-                metadata={"symbol": ticker, "type": "WATCHLIST_SYNC", "updated": datetime.now().isoformat()},
+                metadata={"symbol": ticker, "type": "WATCHLIST_SYNC", "updated": datetime.now().isoformat(), "sentiment": sentiment},
                 namespace=f"idx_{ticker}"
             )
     
@@ -64,3 +86,71 @@ def macro_heartbeat_sync_task():
         namespace="macro_heartbeat"
     )
     return {"status": "synced", "data": macro_data}
+
+@celery_app.task(name="tasks.ipo_discovery")
+def ipo_discovery_task():
+    """
+    Background Task: Scout for upcoming IPOs using Tavily and AI synthesis.
+    """
+    print("🚀 [CELERY-WORKER] Scouting Upcoming IPOs...")
+    ipo_intel = web_intel.tavily.search(query="upcoming IPOs in India 2024 listed schedule news", search_depth="advanced")
+    
+    async def summarize_ipos():
+        summary = await broker.execute_task(
+            "Extract a list of upcoming IPOs from this context. Include company names and status. Return as a structural list.",
+            provider_mode="scout",
+            raw_context=str(ipo_intel)
+        )
+        
+        # In the consolidated schema, the model already handles ticker/entity extraction
+        # we can pull them directly from the summary or let the next sweep pick them up.
+        # For now, just rely on the vector index for discovery tracking.
+
+        vector_db.upsert_document(
+            text=summary.get("summary", ""),
+            metadata={"type": "IPO_DISCOVERY", "updated": datetime.now().isoformat()},
+            namespace="ipo_discovery_pulse"
+        )
+    
+    asyncio.run(summarize_ipos())
+    return {"status": "scouted", "source": "Tavily Intelligence"}
+
+@celery_app.task(name="tasks.mutual_fund_sync")
+def mutual_fund_sync_task(mf_ids: list):
+    """
+    Background Task: Sync NAV and fund metrics for specific Mutual Funds.
+    """
+    print(f"🏦 [CELERY-WORKER] Syncing {len(mf_ids)} Mutual Funds...")
+    for mf in mf_ids:
+        stats = market_engine.fetch_mutual_fund_stats(mf)
+        if stats:
+            vector_db.upsert_document(
+                text=f"Mutual Fund Perf: {stats}",
+                metadata={"mf_id": mf, "type": "MF_INDEX", "updated": datetime.now().isoformat()},
+                namespace=f"mf_{mf}"
+            )
+    return {"status": "synced", "mf_count": len(mf_ids)}
+
+@celery_app.task(name="tasks.sector_discovery")
+def sector_discovery_task(sector: str):
+    """
+    Background Task: Perform deep sector-level research and update the index.
+    """
+    print(f"📡 [CELERY-WORKER] Performing Sector Scan for: {sector}")
+    query = f"Key trends, regulatory changes, and top performing companies in the {sector} sector 2024"
+    sector_intel = web_intel.client.search(query=query, search_depth="advanced", max_results=10)
+    
+    async def synthesize():
+        res = await broker.execute_task(
+            f"Summarize the current state of the {sector} sector.",
+            provider_mode="scout",
+            raw_context=str(sector_intel.get('results', []))
+        )
+        vector_db.upsert_document(
+            text=f"SECTOR REPORT [{sector}]: {res.get('summary')}",
+            metadata={"type": "SECTOR_INDEX", "sector": sector, "updated": datetime.now().isoformat()},
+            namespace=f"sector_{sector.lower()}"
+        )
+    
+    asyncio.run(synthesize())
+    return {"status": "sector_scouted", "sector": sector}

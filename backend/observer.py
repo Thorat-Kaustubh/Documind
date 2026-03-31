@@ -90,7 +90,7 @@ class DocumindKnowledgeGraph:
         ipo_intel = self.web_intel.tavily.search(query="upcoming IPOs in India 2024 listed schedule news", search_depth="advanced")
         summary = await self.broker.execute_task(
             "Summarize upcoming IPOs with expected dates and valuation hints.",
-            provider_mode="visual",
+            provider_mode="scout",
             raw_context=str(ipo_intel)
         )
         self.vector_db.upsert_document(

@@ -38,7 +38,31 @@ celery_app.conf.beat_schedule = {
     },
     "macro-heartbeat-sync": {
         "task": "tasks.macro_heartbeat_sync",
-        "schedule": 600.0, # Every 10 minutes (Real-time macro heartbeat)
+        "schedule": 600.0, # Every 10 minutes
+    },
+    "ipo-scouting-pulse": {
+        "task": "tasks.ipo_discovery",
+        "schedule": 43200.0, # Every 12 hours
+    },
+    "mutual-fund-monitoring": {
+        "task": "tasks.mutual_fund_sync",
+        "schedule": 86400.0, # Every 24 hours
+        "args": (["0P0000XW01.BO", "0P0000XW01.BO"],), # Sample MF symbols
+    },
+    "banking-sector-scout": {
+        "task": "tasks.sector_discovery",
+        "schedule": 86400.0,
+        "args": ("Banking",),
+    },
+    "tech-sector-scout": {
+        "task": "tasks.sector_discovery",
+        "schedule": 86400.0,
+        "args": ("Technology",),
+    },
+    "green-energy-scout": {
+        "task": "tasks.sector_discovery",
+        "schedule": 86400.0,
+        "args": ("Renewable Energy",),
     },
 }
 

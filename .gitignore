@@ -103,4 +103,40 @@ scraping_hub/__pycache__/
 database/__pycache__/
 /tmp/
 /temp/
-*.md
+
+# AI Cache & Model Artifacts
+.ai_cache/
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+
+# Run & Test Scripts
+run.py
+run_*.py
+test_*.py
+test_*.txt
+verify_*.py
+debug_*.py
+verify_system_health.py
+list_gemini_models.py
+audit_system.py
+dry_run_*.py
+dry_run_*.txt
+
+# Results & Temp Outputs
+*.txt
+!backend/requirements.txt
+result_*.txt
+*.results.txt
+performance_report.json
+audit_results.txt
+log.txt
+*.log
+
+# Documentation (Allowing root README.md & Plans)
+!README.md
+!Documind_Master_Implementation_Plan.md
+!Documind_Detailed_Phases.md
+!multi_llm_architecture.md
+!Documind_Detailed_Phases.md
+!financial_engine_plan.md
+!documind_sprint2_update.md
+

@@ -18,3 +18,11 @@ pandas
 python-multipart
 yfinance
 tavily-python
+gunicorn
+celery
+redis
+beautifulsoup4
+httpx
+playwright
+pdfplumber
+camelot-py
