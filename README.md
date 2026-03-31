@@ -33,7 +33,7 @@ Documind operates on a "Super-Agent" architecture where specialized models handl
 | Model | Specialty | Mission Critical Task |
 | :--- | :--- | :--- |
 | **Groq (Llama 3.3)** | **Extreme Latency** | Instant Intent Routing, Live Sentiment Scoring, Market Pulse Summaries. |
-| **Gemini (1.5 Pro)** | **Massive Context** | Annual Report Deep-Dives (200+ Pages), Historical Trend Synthesis, Visual Pattern Recognition. |
+| **Gemini (3.1 Pro)** | **Massive Context** | Annual Report Deep-Dives (200+ Pages), Historical Trend Synthesis, Visual Pattern Recognition. |
 | **OpenAI (GPT-4o)** | **Logic & Extraction** | Structured JSON Entity Extraction, "Lead Analyst" Final Synthesis & Reasoning. |
 
 ### The Orchestrator Workflow
