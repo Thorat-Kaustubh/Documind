@@ -2,7 +2,7 @@ import os
 import asyncio
 from .celery_app import celery_app
 from database.pdf_rag import PDFIntelligenceEngine
-from web_intelligence import WebIntelligence
+from .web_intelligence import WebIntelligence
 from backend.market_data_engine import MarketDataEngine
 from database.vector_storage import VectorStorage
 from datetime import datetime
@@ -26,7 +26,7 @@ def process_pdf_task(symbol: str, pdf_url: str, is_local: bool = False, user_id:
     """
     print(f"📦 [CELERY-WORKER] Processing PDF for {symbol} (User: {user_id or 'SYSTEM'})...")
     # Note: Using'ingest_document_secure' if implemented or just passing to ingest_document
-    success = pdf_rag.process_financial_pdf(symbol, pdf_url, is_local=is_local, user_id=user_id)
+    success = asyncio.run(pdf_rag.process_financial_pdf(symbol, pdf_url, is_local=is_local, user_id=user_id))
     if not success:
         raise Exception(f"Failed to process PDF for {symbol}")
     return {"status": "success", "symbol": symbol, "source": pdf_url, "user_id": user_id}
@@ -51,25 +51,25 @@ def discovery_sweep_task(ticker_list: list):
             # 3. AI Sentiment & Summary Generation (The 'Neural Reasoning' Layer)
             intelligence = await broker.execute_task(
                 f"Analyze the context for {ticker}. Extraction focused.",
-                provider_mode="scout",
+                provider_mode="grounding",
                 raw_context=str(web_context.get('results', []))
             )
             
             summary_text = intelligence.get('summary', '')
             sentiment = intelligence.get('sentiment', {}).get('score', 0.5)
             
-            # Hybrid Storage:
-            # A. HARD MEMORY (SQL)
-            pg_db.insert_market_quote(ticker, market_stats.get('price', 0.0), market_stats.get('change_pct', 0.0), market_stats.get('volume', 0))
-            pg_db.sync_intelligence_feed(ticker, f"Discovery Sync: {ticker}", summary_text, "Tavily/AI", sentiment)
-            
             # B. SEMANTIC MEMORY (Vector)
             payload = f"INTELLIGENCE REPORT: {summary_text}\nMARKET DATA: {market_stats}"
-            vector_db.upsert_document(
+            vector_id = vector_db.upsert_document(
                 text=payload,
-                metadata={"symbol": ticker, "type": "WATCHLIST_SYNC", "updated": datetime.now().isoformat(), "sentiment": sentiment},
+                metadata={"symbol": ticker, "type": "WATCHLIST_SYNC", "updated": datetime.now().isoformat(), "sentiment": sentiment, "is_public": True},
                 namespace=f"idx_{ticker}"
             )
+            
+            # Hybrid Storage:
+            # A. HARD MEMORY (SQL)
+            pg_db.insert_market_quote(ticker, market_stats.get('price', 0.0), market_stats.get('change_pct', 0.0), market_stats.get('volume', 0), str(market_stats.get('market_cap', 0)))
+            pg_db.sync_intelligence_feed(ticker, f"Discovery Sync: {ticker}", summary_text, "Tavily/AI", sentiment, vector_id=vector_id)
     
     asyncio.run(index_batch())
     return {"status": "complete", "batch_size": len(ticker_list)}
@@ -82,7 +82,7 @@ def macro_heartbeat_sync_task():
     macro_data = market_engine.fetch_macro_heartbeat()
     vector_db.upsert_document(
         text=f"Global Macro Snapshot: {macro_data}",
-        metadata={"type": "MACRO_HEARTBEAT", "updated": datetime.now().isoformat()},
+        metadata={"type": "MACRO_HEARTBEAT", "updated": datetime.now().isoformat(), "is_public": True},
         namespace="macro_heartbeat"
     )
     return {"status": "synced", "data": macro_data}
@@ -93,12 +93,12 @@ def ipo_discovery_task():
     Background Task: Scout for upcoming IPOs using Tavily and AI synthesis.
     """
     print("🚀 [CELERY-WORKER] Scouting Upcoming IPOs...")
-    ipo_intel = web_intel.tavily.search(query="upcoming IPOs in India 2024 listed schedule news", search_depth="advanced")
+    ipo_intel = web_intel.tavily_client.search(query="upcoming IPOs in India 2024 listed schedule news", search_depth="advanced")
     
     async def summarize_ipos():
         summary = await broker.execute_task(
             "Extract a list of upcoming IPOs from this context. Include company names and status. Return as a structural list.",
-            provider_mode="scout",
+            provider_mode="grounding",
             raw_context=str(ipo_intel)
         )
         
@@ -108,7 +108,7 @@ def ipo_discovery_task():
 
         vector_db.upsert_document(
             text=summary.get("summary", ""),
-            metadata={"type": "IPO_DISCOVERY", "updated": datetime.now().isoformat()},
+            metadata={"type": "IPO_DISCOVERY", "updated": datetime.now().isoformat(), "is_public": True},
             namespace="ipo_discovery_pulse"
         )
     
@@ -126,7 +126,7 @@ def mutual_fund_sync_task(mf_ids: list):
         if stats:
             vector_db.upsert_document(
                 text=f"Mutual Fund Perf: {stats}",
-                metadata={"mf_id": mf, "type": "MF_INDEX", "updated": datetime.now().isoformat()},
+                metadata={"mf_id": mf, "type": "MF_INDEX", "updated": datetime.now().isoformat(), "is_public": True},
                 namespace=f"mf_{mf}"
             )
     return {"status": "synced", "mf_count": len(mf_ids)}
@@ -138,19 +138,64 @@ def sector_discovery_task(sector: str):
     """
     print(f"📡 [CELERY-WORKER] Performing Sector Scan for: {sector}")
     query = f"Key trends, regulatory changes, and top performing companies in the {sector} sector 2024"
-    sector_intel = web_intel.client.search(query=query, search_depth="advanced", max_results=10)
+    sector_intel = web_intel.tavily_client.search(query=query, search_depth="advanced", max_results=10)
     
     async def synthesize():
         res = await broker.execute_task(
             f"Summarize the current state of the {sector} sector.",
-            provider_mode="scout",
+            provider_mode="grounding",
             raw_context=str(sector_intel.get('results', []))
         )
         vector_db.upsert_document(
             text=f"SECTOR REPORT [{sector}]: {res.get('summary')}",
-            metadata={"type": "SECTOR_INDEX", "sector": sector, "updated": datetime.now().isoformat()},
+            metadata={"type": "SECTOR_INDEX", "sector": sector, "updated": datetime.now().isoformat(), "is_public": True},
             namespace=f"sector_{sector.lower()}"
         )
     
     asyncio.run(synthesize())
     return {"status": "sector_scouted", "sector": sector}
+
+
+@celery_app.task(name="tasks.sentiment_trigger_engine")
+def sentiment_trigger_engine():
+    """
+    💓 Background Task: Sentiment Pulse Monitor
+    Checks the intelligence_feed for significant shifts and triggers user notifications.
+    """
+    print("💓 [CELERY-WORKER] Scanning Intelligence Feed for Sentiment Swings...")
+    # Fetch recent feeds with high/low sentiment (last 1 hour)
+    feeds = pg_db.get_recent_high_impact_feeds(hours=1)
+    
+    alerts_fired = 0
+    for feed in feeds:
+        score = float(feed.get('sentiment_score', 0.5))
+        ticker = feed.get('ticker', 'UNKNOWN')
+        
+        # Define high-impact logic (Bullish/Bearish breakouts)
+        priority = "high" if score > 0.85 or score < 0.15 else "normal"
+        
+        if priority == "high":
+            title = f"🚀 HIGH IMPACT: {ticker}" if score > 0.5 else f"⚠️ ALERT: {ticker}"
+            message = f"Significant {feed.get('sentiment_label', 'market')} shift detected: {feed.get('title')}"
+            
+            # 1. Store global system-level notification
+            pg_db.create_notification(
+                user_id=None, # Global
+                title=title,
+                message=message,
+                type="SENTIMENT_SWING"
+            )
+            
+            # 2. Check for users watching this specific ticker (Personalized Alerts)
+            watching_users = pg_db.get_users_watching_asset(ticker)
+            for user_id in watching_users:
+                pg_db.create_notification(
+                    user_id=user_id,
+                    title=title,
+                    message=message,
+                    type="SENTIMENT_SWING"
+                )
+            
+            alerts_fired += 1
+
+    return {"status": "scan_complete", "alerts_fired": alerts_fired}

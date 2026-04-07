@@ -1,7 +1,12 @@
+import logging
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
+from jugaad_data.nse import NSELive
 from database.postgres_sync import PostgresSync
+
+# Structured Logging
+logger = logging.getLogger("documind.market")
 
 class MarketDataEngine:
     """
@@ -10,6 +15,7 @@ class MarketDataEngine:
     """
     def __init__(self):
         self.db = PostgresSync()
+        self.nse = NSELive()
         self.cache = {}
         self.cache_ttl = 60 # 1 minute cache for fast data
         # Common Macro Indicators
@@ -56,22 +62,35 @@ class MarketDataEngine:
             }
             
             # Save to hard metrics and cache
-            self.db.insert_metric(symbol, metrics['price'], metrics['volume'], metrics['market_cap'])
+            self.db.insert_market_quote(symbol, metrics['price'], metrics['change_pct'], metrics['volume'], str(metrics['market_cap']))
             self._set_cache(symbol, metrics)
             return metrics
         except Exception as e:
-            print(f"Error fetching equity {symbol}: {e}")
+            logger.error(f"Error fetching equity {symbol}: {e}")
             return {}
 
     def fetch_macro_heartbeat(self):
         """
         Fetches global market signals (Commodities, Forex, Indices).
+        Now uses jugaad-data for premium NSE/BSE accuracy.
         """
         results = {}
+        
+        # 1. Fetch NSE/BSE Indices via jugaad-data (Live & Accurate)
+        try:
+            nifty_data = self.nse.live_index("NIFTY 50")
+            results["NIFTY_50"] = nifty_data['data'][0]['lastPrice']
+            
+            # Optional: Sensex can also be fetched if needed, but Nifty is core
+            # jugaad-data is NSE centric, for BSE we still use yfinance or its native tracker
+        except Exception:
+            results["NIFTY_50"] = 0.0
+
+        # 2. Fetch Global Macro via yfinance
         for label, ticker_id in self.macro_tickers.items():
+            if label == "NIFTY_50": continue # Already handled
             try:
                 ticker = yf.Ticker(ticker_id)
-                # Using history for more reliable price fetching of indices/commodities
                 hist = ticker.history(period="1d")
                 if not hist.empty:
                     price = hist['Close'].iloc[-1]
@@ -79,6 +98,33 @@ class MarketDataEngine:
             except:
                 results[label] = 0.0
         return results
+
+    def fetch_economic_pulse(self):
+        """
+        Fetches official RBI rates (Policy Repo, Reverse Repo, etc.)
+        using jugaad-data's RBI module.
+        """
+        # Note: jugaad-data has a dedicated RBI class
+        from jugaad_data.rbi import RBI
+        r = RBI()
+        try:
+            return r.current_rates()
+        except:
+            return {}
+
+    def fetch_corporate_events(self, symbol: str):
+        """
+        Fetches Corporate Actions and Announcements directly from NSE.
+        """
+        try:
+            quote = self.nse.stock_quote(symbol)
+            return {
+                "events": quote.get('metadata', {}).get('status', 'No Status'),
+                "industry": quote.get('metadata', {}).get('industry', 'N/A'),
+                "isin": quote.get('metadata', {}).get('isin', 'N/A')
+            }
+        except:
+            return {}
 
     def fetch_mutual_fund_stats(self, fund_id: str):
         """

@@ -4,8 +4,11 @@ import json
 import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+import logging
 from typing import Dict, Any, Optional
 from backend.ai_broker import AIBroker
+
+logger = logging.getLogger("documind.screener")
 
 class ScreenerAgent:
     """
@@ -23,7 +26,7 @@ class ScreenerAgent:
         url = f"https://www.screener.in/company/{ticker}/"
         
         # --- PHASE 1: FAST PATH (Sub-1s) ---
-        print(f"[Fast-Path] Attempting direct fetch for {ticker}...")
+        logger.info(f"Fast-Path attempting direct fetch for {ticker}")
         try:
             async with httpx.AsyncClient(headers=self.headers, timeout=5.0) as client:
                 response = await client.get(url, follow_redirects=True)
@@ -31,10 +34,10 @@ class ScreenerAgent:
                     soup = BeautifulSoup(response.text, "html.parser")
                     # Check for core financial sections
                     if soup.select("#profit-loss"):
-                        print("[Fast-Path] Hit! Extracting DOM via BeautifulSoup...")
+                        logger.info(f"Fast-Path hit: Extracting DOM for {ticker}")
                         # Extract the inner text of core sections only
                         content = ""
-                        for sel in ["#profit-loss", "#balance-sheet", "#quarters"]:
+                        for sel in ["#profit-loss", "#balance-sheet", "#cash-flow", "#quarters"]:
                             element = soup.select_one(sel)
                             if element:
                                 content += f"\n\n--- {sel} ---\n{element.get_text(separator=' ', strip=True)}"
@@ -44,10 +47,10 @@ class ScreenerAgent:
                             raw_dom=content
                         )
         except Exception as e:
-            print(f"[Fast-Path] Blocked/Error: {str(e)[:40]}")
+            logger.debug(f"Fast-Path blocked or error: {str(e)[:40]}")
 
         # --- PHASE 2: FALLBACK PATH (Sub-8s) ---
-        print(f"[Safe-Path] Falling back to Playwright for {ticker}...")
+        logger.info(f"Safe-Path fallback (Playwright) for {ticker}")
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -62,7 +65,7 @@ class ScreenerAgent:
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=10000)
                 combined_html = await page.evaluate("""() => {
-                    const sections = ["#profit-loss", "#balance-sheet", "#quarters"];
+                    const sections = ["#profit-loss", "#balance-sheet", "#cash-flow", "#quarters"];
                     let results = "";
                     sections.forEach(sel => {
                         const el = document.querySelector(sel);

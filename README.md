@@ -28,57 +28,46 @@ We are currently in a high-velocity phase, integrating neural indexing and advan
 
 ## 🏗️ Technical Architecture
 
-Documind operates on a "Super-Agent" architecture where specialized models handle specific cognitive tasks based on their inherent strengths.
+Documind operates on a **Hybrid Intelligence Architecture** where specialized models handle specific cognitive tasks, augmented by a high-speed parallel discovery layer.
 
-| Model | Specialty | Mission Critical Task |
-| :--- | :--- | :--- |
-| **Groq (Llama 3.3)** | **Extreme Latency** | Instant Intent Routing, Live Sentiment Scoring, Market Pulse Summaries. |
-| **Gemini (3.1 Pro)** | **Massive Context** | Annual Report Deep-Dives (200+ Pages), Historical Trend Synthesis, Visual Pattern Recognition. |
-| **OpenAI (GPT-4o)** | **Logic & Extraction** | Structured JSON Entity Extraction, "Lead Analyst" Final Synthesis & Reasoning. |
+### 🎭 Multi-Model Tiering
 
-### The Orchestrator Workflow
-```mermaid
-graph TD
-    User([User Request]) --> Brain[Orchestrator Agent]
+| Tier | Model | Provider | Mission Critical Task | Latency |
+| :--- | :--- | :--- | :--- | :--- |
+| **Core** | `llama-3.3-70b-versatile` | Groq | **The Architect**: Heavy reasoning, complex synthesis, and structured JSON generation. | < 0.5s |
+| **Fast** | `llama-3.1-8b-instant` | Groq | **The Shredder**: High-speed data extraction, DOM cleaning, and sub-300ms fallback layer. | < 0.3s |
+| **Grounding** | `gemini-2.5-flash-lite` | Google | **The Pulse Tracker**: Real-time fact-checking and news grounding with Google Search integration. | ~5s |
+| **Research** | `gemini-3.1-flash-lite-preview` | Google | **The Investigator**: Deep-dive synthesis of search results for broad intelligence reports. | ~8s |
+| **Chat** | `gemini-3.1-flash-lite-preview` | Google | **The Master Bot**: Memory-rich, high-context conversations (Reuses Research Tier). | ~6s |
 
-    subgraph "Parallel Multi-Model Execution"
-        Brain -->|Fast Intent| Groq[Groq Agent: Llama 3.3]
-        Brain -->|Deep Doc Analysis| Gemini[Gemini Agent: 1.5 Pro]
-        Brain -->|Logic/Extraction| OpenAI[OpenAI Agent: GPT-4o]
-    end
-
-    Groq --> DB[(Memory: ChromaDB)]
-    Gemini --> DB
-    OpenAI --> DB
-
-    DB --> Reviewer[Lead Analyst: GPT-4o]
-    Reviewer --> Response([Final Intelligent Response + Interactive Charts])
-```
+### 🚀 Hybrid Research Layer
+To achieve sub-6s "Live Discovery," Documind bypasses standard model tool-loops:
+1.  **Parallel Discovery**: **Tavily API** fetches live financial sources in parallel (sub-1s).
+2.  **Context Injection**: Search results are injected directly into the LLM's `raw_context`.
+3.  **Single-Pass Synthesis**: The model generates the final report in a single hit, eliminating slow internal "thought" cycles.
 
 ---
 
 ## 🛠️ Tech Stack
 
 - **🤖 Intelligence Layers**: 
-  - **Gemini 3.1 Pro / 3 Flash** (Massive Context & Historical Synthesis)
-  - **Llama 3.3 via Groq** (Sub-100ms Intent Prediction & Sentiment)
-  - **GPT-4o** (Complex logical reasoning & Final Lead Analysis)
+  - **Gemini 3.1 Lite / 2.0 Flash** (Context, Research & Master Chat)
+  - **Llama 3.3 / 3.1 via Groq** (Extreme Latency Intent Prediction & Extraction)
 - **🧠 Agentic Orchestration**: 
-  - **CrewAI** & **LangChain** for autonomous workflow management
-  - **Semantic Prompt Compression** for token-efficient memory recall
+  - **AIBroker (Proprietary)**: Custom task router with semantic caching and cross-provider failover.
+  - **Semantic Prompt Compression**: High-fidelity context summarization (Llama-3.1-8B) for massive data handles.
+  - **Cross-LLM Resilliency**: Automatic fallback from Gemini to Groq on rate limits or context overflow.
 - **🕸️ Research & Extraction**: 
-  - **Tavily Search API** for real-time web grounding
-  - **Firecrawl** for advanced JavaScript-heavy page to Markdown conversion
+  - **Tavily Search API**: High-speed grounding & advanced discovery engine.
+  - **Firecrawl**: JavaScript-heavy scraping for clean financial Markdown.
 - **📦 Backend & Infrastructure**: 
-  - **FastAPI** (Asynchronous Python core)
-  - **Celery + Redis** (Background Market Pulse Monitors)
-  - **Supabase** (PostgreSQL for session state & user data)
-  - **ChromaDB** (Vector store for semantic financial memory)
+  - **FastAPI**: Asynchronous Python core.
+  - **Supabase**: PostgreSQL for session state & user data.
+  - **ChromaDB**: Vector store for semantic financial memory.
 - **🎨 Frontend Experience**: 
-  - **React + Tailwind CSS** (Next-gen glassmorphism interface)
-  - **Framer Motion** (Smooth interactive transitions)
-  - **Recharts** (Dynamic financial visualization)
-  - **Streamlit** (Integrated data-heavy diagnostic dashboards)
+  - **React + Tailwind CSS** (Next-gen Bloomberg-Dark interface).
+  - **Recharts**: Dynamic financial visualization.
+  - **Streamlit**: Integrated forensic diagnostic dashboards.
 
 ---
 
@@ -120,8 +109,8 @@ npm run dev
 ## 📊 Roadmap
 - [x] Phase 1: Foundation & Scraping Fleet (Firecrawl Integration)
 - [x] Phase 2: Multi-LLM Broker & Brain (Task Routing Logic)
-- [ ] Phase 3: Visual Intelligence Engine (Common JSON Chart Schemas)
-- [ ] Phase 4: Autonomous Market Heartbeat (Real-time Nifty 50 Monitoring)
+- [x] Phase 3: Visual Intelligence Engine (Strict JSON Chart Schemas)
+- [x] Phase 4: Autonomous Market Heartbeat (Sentiment & Notification Fleet)
 
 ---
 

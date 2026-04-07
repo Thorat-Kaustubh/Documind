@@ -64,6 +64,10 @@ celery_app.conf.beat_schedule = {
         "schedule": 86400.0,
         "args": ("Renewable Energy",),
     },
+    "sentiment-trigger-monitor": {
+        "task": "tasks.sentiment_trigger_engine",
+        "schedule": 900.0, # Every 15 minutes
+    },
 }
 
 if __name__ == "__main__":

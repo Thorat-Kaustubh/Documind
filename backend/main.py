@@ -3,19 +3,40 @@ import sys
 import time
 import logging
 import asyncio
+import subprocess
+import signal
 import pandas as pd
 import pypdf
+import warnings
 from io import StringIO
 from typing import Optional, List, Dict, Any, Union
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, field_validator, EmailStr
 from collections import defaultdict
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# --- NUCLEAR SILENCER (Absolute Production Silence) ---
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+import logging
+import warnings
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("chromadb").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore")
+# -----------------------------------------------------
 
 from backend.ai_broker import AIBroker
 from database.postgres_sync import PostgresSync
@@ -24,37 +45,129 @@ from backend.web_intelligence import WebIntelligence
 from database.pdf_rag import PDFIntelligenceEngine
 from backend.tasks import process_pdf_task, discovery_sweep_task, sector_discovery_task
 from backend.auth import get_current_user, check_ownership
+from backend.market_data_engine import MarketDataEngine
+
+from contextlib import asynccontextmanager
+from backend.config import settings
+
+# --- RESPONSE MODELS (Fixed Integration) ---
+class PulseResponse(BaseModel):
+    id: str
+    asset_id: str
+    title: str
+    content: str
+    source: str
+    sentiment_score: float
+    category: str
+    published_at: datetime
+    ticker: str
+    company_name: str
+
+class VitalsResponse(BaseModel):
+    nifty: float
+    repo_rate: Union[float, str]
+    timestamp: str
+
+class ResearchResponse(BaseModel):
+    status: str
+    context: str
+    pdfs: List[str]
+    metrics: Dict[str, Any]
+
+class UserProfile(BaseModel):
+    id: str
+    email: Optional[str] = None
+    profile: Dict[str, Any] = {}
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    uptime: float
+    timestamp: datetime
 
 # 1. STRUCTURED LOGGING (Audit Trail)
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO if not settings.DEBUG else logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger("documind-performance")
+logger = logging.getLogger("documind.api")
+
+# Global process tracking for Celery
+celery_process = None
+
+# LIFESPAN (Production Resource Management)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global celery_process
+    # Startup logic
+    logger.info(f"🚀 {settings.APP_NAME} {settings.VERSION} Starting...")
+    
+    # 1. Start Celery worker in background (Discovery Fleet)
+    try:
+        # Check Redis connectivity first
+        import redis
+        client = redis.from_url(settings.REDIS_URL)
+        client.ping()
+        logger.info("🔗 Redis connected. Launching Discovery Fleet (Celery)...")
+        
+        celery_cmd = [
+            "celery", "-A", "backend.celery_app", "worker", 
+            "--loglevel=info", "--pool=solo"
+        ]
+        # Launching with detached process group logic for Windows/Unix reliability
+        celery_process = subprocess.Popen(
+            celery_cmd,
+            # Inherit terminal for visibility while debugging/monitoring
+            stderr=subprocess.STDOUT
+        )
+        logger.info(f"🐢 Discovery Fleet active (PID: {celery_process.pid})")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not start Celery Discovery Fleet: {e}")
+        logger.info("Ensure Redis is running for background tasks.")
+
+    # 2. Start internal loops
+    asyncio.create_task(refresh_market_cache_loop())
+    asyncio.create_task(temp_cleanup_loop())
+    
+    yield
+    
+    # Shutdown logic
+    logger.info("🛑 Shutting down server...")
+    if celery_process:
+        logger.info(f"🛑 Terminating Discovery Fleet (PID: {celery_process.pid})...")
+        celery_process.terminate()
+        try:
+            celery_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            celery_process.kill()
+        logger.info("🐢 Discovery Fleet grounded.")
 
 app = FastAPI(
-    title="Documind Elite: Optimized Production Engine",
-    version="2.2.0",
-    docs_url=None, 
-    redoc_url=None
+    title=settings.APP_NAME,
+    version=settings.VERSION,
+    lifespan=lifespan
 )
 
 # 2. CORS HARDENING (Restrict Origins)
-allowed_origins = [
-    os.getenv("FRONTEND_URL", "http://localhost:5173"),
-    "http://localhost:5173",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 3. ABUSE PROTECTION (Rate Limiting)
+# 3. GLOBAL EXCEPTION HANDLER (Hardening)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"[INTERNAL-ERROR] {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Documind Server Error", "message": "An internal error occurred. Our engineers have been notified."},
+    )
+
+# 4. ABUSE PROTECTION (Rate Limiting)
 class RateLimiter:
     def __init__(self, limit: int, window: int):
         self.limit = limit
@@ -75,7 +188,7 @@ ai_limiter = RateLimiter(limit=20, window=60)
 async def check_rate_limit(request: Request):
     client_ip = request.client.host
     if not api_limiter.is_allowed(client_ip):
-        raise HTTPException(status_code=429, detail="Too many requests.")
+        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
 
 # Initialize Core Services (Shared instances for pooling)
 broker = AIBroker()
@@ -83,11 +196,54 @@ pg_db = PostgresSync()
 vector_db = VectorStorage()
 web_intel = WebIntelligence()
 pdf_rag = PDFIntelligenceEngine()
+market_engine = MarketDataEngine()
 
-os.makedirs("temp_pdfs", exist_ok=True)
+async def temp_cleanup_loop():
+    """Periodically purges old temporary PDFs to save disk space."""
+    while True:
+        try:
+            now = time.time()
+            if os.path.exists(settings.TEMP_DIR):
+                for f in os.listdir(settings.TEMP_DIR):
+                    fpath = os.path.join(settings.TEMP_DIR, f)
+                    if os.path.isfile(fpath) and os.stat(fpath).st_mtime < now - 3600:
+                        os.remove(fpath)
+                        logger.info(f"Cleanup: Removed stale file {f}")
+        except Exception as e:
+            logger.error(f"Cleanup Failed: {e}")
+        await asyncio.sleep(600) # Every 10 mins
+
+async def refresh_market_cache_loop():
+    """Eagerly refreshes market data every 60 seconds to ensure sub-1ms response times."""
+    while True:
+        try:
+            # 1. Pulse Refresh
+            pulse = await asyncio.to_thread(pg_db.get_market_pulse)
+            _static_cache["pulse"] = {"v": pulse, "t": time.time()}
+
+            # 2. Vitals Refresh
+            macro_task = asyncio.to_thread(market_engine.fetch_macro_heartbeat)
+            econ_task = asyncio.to_thread(market_engine.fetch_economic_pulse)
+            macro, econ = await asyncio.gather(macro_task, econ_task)
+            
+            vitals = {
+                "nifty": macro.get("NIFTY_50", 0.0),
+                "repo_rate": econ.get("Policy Repo Rate", "N/A"),
+                "timestamp": datetime.now().isoformat()
+            }
+            _static_cache["vitals"] = {"v": vitals, "t": time.time()}
+            
+            logger.info("Eager Market Cache Refreshed.")
+        except Exception as e:
+            logger.error(f"Eager Cache Refresh Failed: {e}")
+        
+        await asyncio.sleep(60)
+
+os.makedirs(settings.TEMP_DIR, exist_ok=True)
 
 # L1 MEMORY CACHE (Hot Data)
 _static_cache = {}
+start_time = time.time()
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -98,9 +254,23 @@ class ResearchRequest(BaseModel):
     ticker: str
     company_name: str
 
+class WatchlistRequest(BaseModel):
+    ticker: str
+    action: Optional[str] = "ADD"
+
+@app.get("/api/health", response_model=HealthResponse)
+async def health_check():
+    """System Vitality Report."""
+    return HealthResponse(
+        status="healthy",
+        version=settings.VERSION,
+        uptime=time.time() - start_time,
+        timestamp=datetime.now()
+    )
+
 @app.get("/", dependencies=[Depends(check_rate_limit)])
 async def root():
-    return {"status": "Documind Elite Engine Optimized", "version": "2.2.0"}
+    return {"status": settings.APP_NAME + " Engine Optimized", "version": settings.VERSION}
 
 @app.post("/api/analyze-file")
 async def analyze_file(
@@ -128,6 +298,9 @@ async def analyze_file(
                 pdf_reader = pypdf.PdfReader(f)
                 content = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
+        # Audit Logic (Fix: Production Traceability)
+        pg_db.create_audit_log(user.id, "ANALYZE_FILE", f"Analyzed {file.filename} in {mode} mode", request.client.host)
+        
         return await broker.execute_task(prompt, provider_mode=mode, raw_context=content[:40000])
     finally:
         if os.path.exists(file_path): os.remove(file_path)
@@ -140,19 +313,28 @@ async def chat_stream(request: Request, chat_req: ChatRequest, user: Any = Depen
     context_text = "\n".join(results['documents'][0]) if results['documents'] else ""
     return StreamingResponse(broker.stream_task(chat_req.prompt, raw_context=context_text), media_type="text/event-stream")
 
-@app.post("/api/research")
+@app.post("/api/research", response_model=ResearchResponse)
 async def perform_research(request: Request, research_req: ResearchRequest, user: Any = Depends(get_current_user)):
-    """PARALLELIZED RESEARCH: Fetches context and PDF links concurrently."""
+    """PARALLELIZED RESEARCH: Fetches context, PDF links, and metrics concurrently."""
     await check_rate_limit(request)
     # Parallel async execution
     context_task = asyncio.to_thread(web_intel.get_company_context, research_req.ticker, research_req.company_name)
     pdf_task = asyncio.to_thread(web_intel.find_annual_reports, research_req.company_name)
-    context, pdf_links = await asyncio.gather(context_task, pdf_task)
+    metrics_task = asyncio.to_thread(market_engine.fetch_equity_intelligence, research_req.ticker)
+    
+    context, pdf_links, metrics = await asyncio.gather(context_task, pdf_task, metrics_task)
     
     if pdf_links:
         process_pdf_task.delay(research_req.ticker, pdf_links[0], user_id=user.id)
 
-    return {"status": "research_initiated", "context": context, "pdfs": pdf_links[:2]}
+    pg_db.create_audit_log(user.id, "RESEARCH_INIT", f"Target: {research_req.ticker}", request.client.host)
+
+    return ResearchResponse(
+        status="research_initiated", 
+        context=context, 
+        pdfs=pdf_links[:2],
+        metrics=metrics
+    )
 
 @app.post("/api/rag-chat")
 async def rag_chat(request: Request, chat_req: ChatRequest, user: Any = Depends(get_current_user)):
@@ -164,15 +346,35 @@ async def rag_chat(request: Request, chat_req: ChatRequest, user: Any = Depends(
             meta = results['metadatas'][0][i]
             context_chunks.append(f"[Ref: {meta.get('source')}]: {doc}")
     
-    return await broker.execute_task(chat_req.prompt, provider_mode="core", raw_context="\n\n".join(context_chunks))
+    return await broker.execute_task(chat_req.prompt, provider_mode="chat", raw_context="\n\n".join(context_chunks))
 
-@app.get("/api/market-pulse", dependencies=[Depends(get_current_user)])
+@app.get("/api/market-pulse", response_model=List[PulseResponse], dependencies=[Depends(get_current_user)])
 async def get_market_pulse():
-    now = time.time()
-    if "pulse" in _static_cache and now - _static_cache["pulse"]["t"] < 30:
+    # Return from memory instantly
+    if "pulse" in _static_cache:
         return _static_cache["pulse"]["v"]
+    # Cold start fallback
     res = await asyncio.to_thread(pg_db.get_market_pulse)
-    _static_cache["pulse"] = {"v": res, "t": now}
+    _static_cache["pulse"] = {"v": res, "t": time.time()}
+    return res
+
+@app.get("/api/market-vitals", response_model=VitalsResponse)
+async def get_market_vitals():
+    """Returns high-fidelity NSE/RBI signals for the anonymous landing page pulse."""
+    if "vitals" in _static_cache:
+        return _static_cache["vitals"]["v"]
+    
+    # Cold start fallback
+    macro_task = asyncio.to_thread(market_engine.fetch_macro_heartbeat)
+    econ_task = asyncio.to_thread(market_engine.fetch_economic_pulse)
+    macro, econ = await asyncio.gather(macro_task, econ_task)
+    
+    res = {
+        "nifty": macro.get("NIFTY_50", 0.0),
+        "repo_rate": econ.get("Policy Repo Rate", "N/A"),
+        "timestamp": datetime.now().isoformat()
+    }
+    _static_cache["vitals"] = {"v": res, "t": time.time()}
     return res
 
 @app.get("/api/assets", dependencies=[Depends(get_current_user)])
@@ -198,6 +400,21 @@ async def get_sector_intelligence(sector: Optional[str] = None, user: Any = Depe
     query = f"SECTOR REPORT [{sector}]" if sector else "SECTOR REPORT"
     results = vector_db.query(query_text=query, n_results=8, user_id=user.id)
     return {"results": results['documents'][0] if results['documents'] else []}
+
+@app.post("/api/watchlist", dependencies=[Depends(get_current_user)])
+async def manage_watchlist(req: WatchlistRequest, user: Any = Depends(get_current_user)):
+    success = await asyncio.to_thread(pg_db.manage_watchlist, user.id, req.ticker, req.action)
+    return {"status": "success" if success else "failed"}
+
+@app.get("/api/watchlist", dependencies=[Depends(get_current_user)])
+async def get_watchlist(user: Any = Depends(get_current_user)):
+    res = await asyncio.to_thread(pg_db.get_user_watchlist, user.id)
+    return res
+
+@app.get("/api/notifications", dependencies=[Depends(get_current_user)])
+async def get_notifications(user: Any = Depends(get_current_user)):
+    res = await asyncio.to_thread(pg_db.get_user_notifications, user.id)
+    return res
 
 if __name__ == "__main__":
     import uvicorn

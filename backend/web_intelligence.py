@@ -64,3 +64,12 @@ class WebIntelligence:
             ]
             
         return pdf_links[:3]
+    def get_company_context(self, ticker: str, company_name: str) -> str:
+        """Sync wrapper for context discovery via Tavily."""
+        if not self.tavily_client: return "No active discovery engine."
+        try:
+            results = self.tavily_client.search(query=f"{company_name} ({ticker}) latest financial trends, analyst ratings, and results 2024", search_depth="advanced", max_results=5)
+            combined_context = "\n".join([f"Source: {r['url']}\nContent: {r['content']}" for r in results.get('results', [])])
+            return combined_context if combined_context else "No recent data found in discovery sweep."
+        except Exception as e:
+            return f"Discovery Intelligence Error: {str(e)}"

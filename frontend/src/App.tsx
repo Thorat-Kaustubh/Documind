@@ -3,8 +3,13 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import ProtectedRoute from './components/ProtectedRoute';
 
 // PERFORMANCE: Lazy Load non-critical routes (Bundle Size optimization)
-const LoginPage = lazy(() => import('./pages/LoginPage'));
-const Dashboard = lazy(() => import('./pages/Dashboard'));
+import LandingPage from './pages/LandingPage';
+import Dashboard from './pages/Dashboard';
+import SignupPage from './pages/SignupPage';
+import LoginPage from './pages/LoginPage';
+import StockReport from './pages/StockReport';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 
 const App: React.FC = () => {
   return (
@@ -15,7 +20,16 @@ const App: React.FC = () => {
         </div>
       }>
         <Routes>
+          <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/report/:query" element={
+            <ProtectedRoute>
+              <StockReport />
+            </ProtectedRoute>
+          } />
           <Route 
             path="/dashboard" 
             element={
@@ -24,7 +38,6 @@ const App: React.FC = () => {
               </ProtectedRoute>
             } 
           />
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Suspense>
     </Router>

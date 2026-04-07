@@ -14,7 +14,7 @@ class PDFIntelligenceEngine:
     Transforms dense PDFs into signal-rich, structure-aware intelligence.
     """
     def __init__(self):
-        self.vector_db = VectorStorage()
+        self.vector_db = VectorStorage(collection_name="pdf_intelligence")
         self.broker = AIBroker()
         self.temp_dir = "temp_pdfs"
         os.makedirs(self.temp_dir, exist_ok=True)
@@ -119,7 +119,7 @@ class PDFIntelligenceEngine:
 
     def _trigger_fallback(self, error_code: str, reason: str) -> Dict[str, Any]:
         """Signal for fault-tolerant fallback."""
-        print(f"⚠️ [PDFIntel-Error] {error_code}: {reason}")
+        print(f"[!] [PDFIntel-Error] {error_code}: {reason}")
         return {
             "status": "FAILED_LOW_FIDELITY",
             "reason": f"[{error_code}] {reason}",

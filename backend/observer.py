@@ -65,6 +65,15 @@ class DocumindKnowledgeGraph:
                 mf_tasks = [self._index_mf_data(mf) for mf in self.watchlists["MUTUAL_FUNDS"]]
                 await asyncio.gather(*mf_tasks)
 
+                # 5. ECONOMY SYNC (RBI Pulse)
+                print("💰 [Crawl] Fetching RBI Economic Pulse...")
+                rbi_data = self.market_engine.fetch_economic_pulse()
+                self._index_rbi_context(rbi_data)
+
+                # 6. SECTOR INTELLIGENCE
+                print("🏗️ [Crawl] Harvesting Sector Trends...")
+                # (Optional: Sector-specific logic)
+
                 print(f"✅ [OMNI-SYNC] Complete at {datetime.now()}. AI Brain updated.")
             except Exception as e:
                 print(f"❌ [Fleet Alert] Discovery interrupted: {e}")
@@ -72,16 +81,28 @@ class DocumindKnowledgeGraph:
             await asyncio.sleep(3600)
 
     async def _index_entity_knowledge(self, ticker: str):
-        """Standard Index Link: WEB_DATA + MARKET_STATS + AI_SYNTHESIS"""
+        """Standard Index Link: WEB_DATA + MARKET_STATS + CORPORATE_EVENTS + AI_SYNTHESIS"""
         print(f"🔎 Indexing {ticker} (Upsert)...")
-        web_context = self.web_intel.get_company_context(ticker, ticker)
+        # Fixed: Using correct async method name from WebIntelligence
+        web_context = await self.web_intel.get_comprehensive_intelligence(ticker, ticker)
         market_stats = self.market_engine.fetch_equity_intelligence(ticker)
+        corp_events = self.market_engine.fetch_corporate_events(ticker)
         
-        payload = f"INTELLIGENCE REPORT FOR {ticker}\nMARKET DATA: {market_stats}\nWEB INSIGHTS: {web_context.get('ai_answer', '')}"
+        payload = (
+            f"INTELLIGENCE REPORT FOR {ticker}\n"
+            f"MARKET DATA: {market_stats}\n"
+            f"CORPORATE EVENTS: {corp_events}\n"
+            f"WEB INSIGHTS: {web_context.get('ai_answer', '')}"
+        )
         
         self.vector_db.upsert_document(
             text=payload,
-            metadata={"symbol": ticker, "type": "EQUITY_INDEX", "updated": datetime.now().isoformat()},
+            metadata={
+                "symbol": ticker, 
+                "type": "EQUITY_INDEX", 
+                "updated": datetime.now().isoformat(),
+                "industry": corp_events.get('industry', 'N/A')
+            },
             namespace=f"idx_{ticker}"
         )
 
@@ -115,6 +136,15 @@ class DocumindKnowledgeGraph:
                 metadata={"mf_id": mf_id, "type": "MF_INDEX"},
                 namespace=f"mf_{mf_id}"
             )
+
+    def _index_rbi_context(self, data: dict):
+        """Indexes macroeconomic context from RBI"""
+        if not data: return
+        self.vector_db.upsert_document(
+            text=f"Official RBI Economic Indicators: {data}",
+            metadata={"type": "RBI_ECON_INDEX", "updated": datetime.now().isoformat()},
+            namespace="economy_pulse"
+        )
 
 if __name__ == "__main__":
     kg = DocumindKnowledgeGraph()

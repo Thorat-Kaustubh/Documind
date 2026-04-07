@@ -58,8 +58,11 @@ class PDFDownloadOrchestrator:
     async def _strategy_browser(self, url: str) -> Dict[str, Any]:
         """Resource-Blocked Browser for heavy IR Redirects."""
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(user_agent=self.agents[0])
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"] # ADVANCED STEALTH
+            )
+            context = await browser.new_context(user_agent=self.agents[0], viewport={'width': 1920, 'height': 1080})
             page = await context.new_page()
             
             # BLOCK HEAVY ASSETS (Images/Fonts)

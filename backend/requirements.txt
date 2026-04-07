@@ -3,6 +3,7 @@ uvicorn
 python-dotenv
 requests
 psycopg2-binary
+pydantic-settings
 chromadb>=1.5.5
 groq
 google-genai
@@ -26,3 +27,5 @@ httpx
 playwright
 pdfplumber
 camelot-py
+sentence-transformers
+jugaad-data
