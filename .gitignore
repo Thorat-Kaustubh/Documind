@@ -79,8 +79,6 @@ frontend/node_modules/
 frontend/dist/
 dist-ssr/
 *.local
-package.json
-package-lock.json
 
 # === DATABASE & DATA ===
 vector_db/
@@ -91,7 +89,8 @@ data/*.json
 !data/.keep
 
 # === IDE ===
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.sublime-project
 *.sublime-workspace
@@ -139,4 +138,5 @@ log.txt
 !Documind_Detailed_Phases.md
 !financial_engine_plan.md
 !documind_sprint2_update.md
-
+# Specification
+new version.md

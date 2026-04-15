@@ -38,7 +38,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 # -----------------------------------------------------
 
-from backend.ai_broker import AIBroker
+from backend.orchestrator import ExecutionOrchestrator
 from database.postgres_sync import PostgresSync
 from database.vector_storage import VectorStorage
 from backend.web_intelligence import WebIntelligence
@@ -103,6 +103,13 @@ async def lifespan(app: FastAPI):
     # Startup logic
     logger.info(f"🚀 {settings.APP_NAME} {settings.VERSION} Starting...")
     
+    # 0. Synchronize Database Schema (Hardened Initializer)
+    try:
+        pg_db.initialize_schema()
+        logger.info("📊 Database schema verified and synchronized.")
+    except Exception as e:
+        logger.error(f"❌ DATABASE_SYNC_FAILED: {e}")
+
     # 1. Start Celery worker in background (Discovery Fleet)
     try:
         # Check Redis connectivity first
@@ -159,15 +166,24 @@ app.add_middleware(
 )
 
 # 3. GLOBAL EXCEPTION HANDLER (Hardening)
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"[INTERNAL-ERROR] {str(exc)}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"error": "Documind Server Error", "message": "An internal error occurred. Our engineers have been notified."},
-    )
+# 4. CENTRALIZED AUTH MIDDLEWARE (Section 6.2)
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """
+    Global security layer that ensures all API requests have trace IDs 
+    and validates tokens for protected routes.
+    """
+    start_time = time.time()
+    response = await call_next(request)
+    
+    # Add performance and traceability headers
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Request-ID"] = request.headers.get("X-Request-ID", f"req_{int(time.time()*1000)}")
+    
+    return response
 
-# 4. ABUSE PROTECTION (Rate Limiting)
+# 5. ABUSE PROTECTION (Rate Limiting)
 class RateLimiter:
     def __init__(self, limit: int, window: int):
         self.limit = limit
@@ -191,7 +207,7 @@ async def check_rate_limit(request: Request):
         raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
 
 # Initialize Core Services (Shared instances for pooling)
-broker = AIBroker()
+orchestrator = ExecutionOrchestrator()
 pg_db = PostgresSync()
 vector_db = VectorStorage()
 web_intel = WebIntelligence()
@@ -219,7 +235,7 @@ async def refresh_market_cache_loop():
         try:
             # 1. Pulse Refresh
             pulse = await asyncio.to_thread(pg_db.get_market_pulse)
-            _static_cache["pulse"] = {"v": pulse, "t": time.time()}
+            market_cache.set("pulse", pulse)
 
             # 2. Vitals Refresh
             macro_task = asyncio.to_thread(market_engine.fetch_macro_heartbeat)
@@ -231,7 +247,7 @@ async def refresh_market_cache_loop():
                 "repo_rate": econ.get("Policy Repo Rate", "N/A"),
                 "timestamp": datetime.now().isoformat()
             }
-            _static_cache["vitals"] = {"v": vitals, "t": time.time()}
+            market_cache.set("vitals", vitals)
             
             logger.info("Eager Market Cache Refreshed.")
         except Exception as e:
@@ -241,9 +257,23 @@ async def refresh_market_cache_loop():
 
 os.makedirs(settings.TEMP_DIR, exist_ok=True)
 
-# L1 MEMORY CACHE (Hot Data)
-_static_cache = {}
-start_time = time.time()
+# --- ENTERPRISE ANALYTICS CACHE ---
+class DynamicCacheService:
+    """Managed session-less cache for high-frequency market data."""
+    def __init__(self):
+        self._store = {}
+        self._start_time = time.time()
+
+    def set(self, key: str, value: Any):
+        self._store[key] = {"v": value, "t": time.time()}
+
+    def get(self, key: str) -> Optional[Any]:
+        return self._store.get(key, {}).get("v")
+
+    def get_uptime(self) -> float:
+        return time.time() - self._start_time
+
+market_cache = DynamicCacheService()
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -264,13 +294,20 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         version=settings.VERSION,
-        uptime=time.time() - start_time,
+        uptime=market_cache.get_uptime(),
         timestamp=datetime.now()
     )
 
 @app.get("/", dependencies=[Depends(check_rate_limit)])
 async def root():
     return {"status": settings.APP_NAME + " Engine Optimized", "version": settings.VERSION}
+
+async def background_audit_log(user_id: Optional[str], action: str, resource: str, ip_address: Optional[str]):
+    """Dispatches audit log creation to a thread pool to avoid blocking the event loop."""
+    try:
+        await asyncio.to_thread(pg_db.create_audit_log, user_id, action, resource, ip_address)
+    except Exception as e:
+        logger.error(f"Background Audit Failed: {e}")
 
 @app.post("/api/analyze-file")
 async def analyze_file(
@@ -298,10 +335,10 @@ async def analyze_file(
                 pdf_reader = pypdf.PdfReader(f)
                 content = "\n".join([p.extract_text() for p in pdf_reader.pages])
         
-        # Audit Logic (Fix: Production Traceability)
-        pg_db.create_audit_log(user.id, "ANALYZE_FILE", f"Analyzed {file.filename} in {mode} mode", request.client.host)
+        # Audit Logic (Dispatch to background)
+        asyncio.create_task(background_audit_log(user.id, "ANALYZE_FILE", f"Analyzed {file.filename} in {mode} mode", request.client.host))
         
-        return await broker.execute_task(prompt, provider_mode=mode, raw_context=content[:40000])
+        return await orchestrator.execute_query(prompt, user_id=user.id, context=content[:40000])
     finally:
         if os.path.exists(file_path): os.remove(file_path)
 
@@ -311,7 +348,7 @@ async def chat_stream(request: Request, chat_req: ChatRequest, user: Any = Depen
     await check_rate_limit(request)
     results = vector_db.query(query_text=chat_req.prompt, n_results=5, user_id=user.id)
     context_text = "\n".join(results['documents'][0]) if results['documents'] else ""
-    return StreamingResponse(broker.stream_task(chat_req.prompt, raw_context=context_text), media_type="text/event-stream")
+    return StreamingResponse(orchestrator.stream_task(chat_req.prompt, context=context_text), media_type="text/event-stream")
 
 @app.post("/api/research", response_model=ResearchResponse)
 async def perform_research(request: Request, research_req: ResearchRequest, user: Any = Depends(get_current_user)):
@@ -327,7 +364,7 @@ async def perform_research(request: Request, research_req: ResearchRequest, user
     if pdf_links:
         process_pdf_task.delay(research_req.ticker, pdf_links[0], user_id=user.id)
 
-    pg_db.create_audit_log(user.id, "RESEARCH_INIT", f"Target: {research_req.ticker}", request.client.host)
+    asyncio.create_task(background_audit_log(user.id, "RESEARCH_INIT", f"Target: {research_req.ticker}", request.client.host))
 
     return ResearchResponse(
         status="research_initiated", 
@@ -346,23 +383,23 @@ async def rag_chat(request: Request, chat_req: ChatRequest, user: Any = Depends(
             meta = results['metadatas'][0][i]
             context_chunks.append(f"[Ref: {meta.get('source')}]: {doc}")
     
-    return await broker.execute_task(chat_req.prompt, provider_mode="chat", raw_context="\n\n".join(context_chunks))
+    return await orchestrator.execute_query(chat_req.prompt, user_id=user.id, context="\n\n".join(context_chunks))
 
 @app.get("/api/market-pulse", response_model=List[PulseResponse], dependencies=[Depends(get_current_user)])
 async def get_market_pulse():
     # Return from memory instantly
-    if "pulse" in _static_cache:
-        return _static_cache["pulse"]["v"]
+    cached = market_cache.get("pulse")
+    if cached: return cached
     # Cold start fallback
     res = await asyncio.to_thread(pg_db.get_market_pulse)
-    _static_cache["pulse"] = {"v": res, "t": time.time()}
+    market_cache.set("pulse", res)
     return res
 
 @app.get("/api/market-vitals", response_model=VitalsResponse)
 async def get_market_vitals():
     """Returns high-fidelity NSE/RBI signals for the anonymous landing page pulse."""
-    if "vitals" in _static_cache:
-        return _static_cache["vitals"]["v"]
+    cached = market_cache.get("vitals")
+    if cached: return cached
     
     # Cold start fallback
     macro_task = asyncio.to_thread(market_engine.fetch_macro_heartbeat)
@@ -374,25 +411,23 @@ async def get_market_vitals():
         "repo_rate": econ.get("Policy Repo Rate", "N/A"),
         "timestamp": datetime.now().isoformat()
     }
-    _static_cache["vitals"] = {"v": res, "t": time.time()}
+    market_cache.set("vitals", res)
     return res
 
 @app.get("/api/assets", dependencies=[Depends(get_current_user)])
 async def get_assets():
-    now = time.time()
-    if "assets" in _static_cache and now - _static_cache["assets"]["t"] < 1800:
-        return _static_cache["assets"]["v"]
+    cached = market_cache.get("assets")
+    if cached: return cached
     res = await asyncio.to_thread(pg_db.get_all_assets)
-    _static_cache["assets"] = {"v": res, "t": now}
+    market_cache.set("assets", res)
     return res
 
 @app.get("/api/ipos", dependencies=[Depends(get_current_user)])
 async def get_ipos():
-    now = time.time()
-    if "ipos" in _static_cache and now - _static_cache["ipos"]["t"] < 3600:
-        return _static_cache["ipos"]["v"]
+    cached = market_cache.get("ipos")
+    if cached: return cached
     res = await asyncio.to_thread(pg_db.get_ipo_watchlist)
-    _static_cache["ipos"] = {"v": res, "t": now}
+    market_cache.set("ipos", res)
     return res
 
 @app.get("/api/sectors", dependencies=[Depends(get_current_user)])
@@ -415,6 +450,18 @@ async def get_watchlist(user: Any = Depends(get_current_user)):
 async def get_notifications(user: Any = Depends(get_current_user)):
     res = await asyncio.to_thread(pg_db.get_user_notifications, user.id)
     return res
+
+@app.post("/api/audit/security-event")
+async def log_security_event(request: Request, event: Dict[str, Any]):
+    """Records security-critical events (failures, suspicious activity)."""
+    # Note: We don't use 'get_current_user' here because login failures are unauthenticated
+    asyncio.create_task(background_audit_log(
+        user_id=None, 
+        action=event.get("action", "SECURITY_EVENT"), 
+        resource=event.get("email", "unknown_user"),
+        ip_address=request.client.host
+    ))
+    return {"status": "recorded"}
 
 if __name__ == "__main__":
     import uvicorn

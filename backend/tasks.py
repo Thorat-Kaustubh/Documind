@@ -16,6 +16,8 @@ from database.postgres_sync import PostgresSync
 pg_db = PostgresSync()
 from .ai_broker import AIBroker
 broker = AIBroker()
+from .services.data_update.queue import QueueManager
+queue = QueueManager()
 
 @celery_app.task(name="tasks.process_pdf_task", autoretry_for=(Exception,), retry_kwargs={'max_retries': 3, 'countdown': 30})
 def process_pdf_task(symbol: str, pdf_url: str, is_local: bool = False, user_id: str = None):
@@ -66,10 +68,24 @@ def discovery_sweep_task(ticker_list: list):
                 namespace=f"idx_{ticker}"
             )
             
-            # Hybrid Storage:
-            # A. HARD MEMORY (SQL)
-            pg_db.insert_market_quote(ticker, market_stats.get('price', 0.0), market_stats.get('change_pct', 0.0), market_stats.get('volume', 0), str(market_stats.get('market_cap', 0)))
-            pg_db.sync_intelligence_feed(ticker, f"Discovery Sync: {ticker}", summary_text, "Tavily/AI", sentiment, vector_id=vector_id)
+            # Hybrid Storage (v2: Event-Driven Ingestion)
+            # Instead of direct writes, we publish to the data update stream
+            queue.publish_event("MARKET_QUOTE", {
+                "ticker": ticker,
+                "price": market_stats.get('price', 0.0),
+                "change_pct": market_stats.get('change_pct', 0.0),
+                "volume": market_stats.get('volume', 0),
+                "market_cap": str(market_stats.get('market_cap', 0))
+            })
+            
+            queue.publish_event("INTELLIGENCE_FEED", {
+                "ticker": ticker,
+                "title": f"Discovery Sync: {ticker}",
+                "content": summary_text,
+                "source": "Tavily/AI",
+                "sentiment": sentiment,
+                "vector_id": vector_id
+            })
     
     asyncio.run(index_batch())
     return {"status": "complete", "batch_size": len(ticker_list)}

@@ -25,7 +25,7 @@ class PostgresSync:
             try:
                 PostgresSync._pool = pool.ThreadedConnectionPool(
                     minconn=1,
-                    maxconn=20,
+                    maxconn=50,
                     dsn=self.connection_url
                 )
                 logger.info("✅ [POSTGRES] Connection Pool Initialized.")
@@ -62,7 +62,7 @@ class PostgresSync:
                 # Load the full schema from the .sql file
                 schema_path = os.path.join(os.path.dirname(__file__), "multi_asset_schema.sql")
                 if os.path.exists(schema_path):
-                    with open(schema_path, "r") as f:
+                    with open(schema_path, "r", encoding="utf-8") as f:
                         cur.execute(f.read())
                 logger.info("📊 [POSTGRES] Unified Multi-Asset Schema Synchronized.")
         except Exception as e:
@@ -258,6 +258,33 @@ class PostgresSync:
         except Exception as e:
             logger.error(f"❌ [POSTGRES-WATCHLIST-MANAGE-ERROR] {e}")
             return False
+
+    def get_user_profile(self, user_id: str):
+        """Retrieves a user's unified profile directly from the database."""
+        try:
+            with self.get_cursor() as cur:
+                if not cur: return None
+                cur.execute("SELECT * FROM profiles WHERE id = %s", (user_id,))
+                return cur.fetchone()
+        except Exception as e:
+            logger.error(f"❌ [POSTGRES-PROFILE-GET-ERROR] {e}")
+            return None
+
+    def ensure_profile_exists(self, user_id: str, email: str, full_name: str = None):
+        """Emergency profile synchronization: Ensures a profile exists if the trigger was delayed."""
+        try:
+            with self.get_cursor() as cur:
+                if not cur: return None
+                cur.execute("""
+                    INSERT INTO profiles (id, email, full_name)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING *
+                """, (user_id, email, full_name or email.split('@')[0]))
+                return cur.fetchone()
+        except Exception as e:
+            logger.error(f"❌ [POSTGRES-PROFILE-SYNC-ERROR] {e}")
+            return None
 
     def get_user_watchlist(self, user_id: str):
         """Retrieves a user's personal watchlist with real-time quotes."""

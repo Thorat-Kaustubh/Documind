@@ -73,11 +73,11 @@ def fix():
         """)
 
         conn.commit()
-        print("✅ [DATABASE] Mega-Resilient Sync Trigger Established.")
+        print("[DATABASE] Mega-Resilient Sync Trigger Established.")
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"❌ Database error: {e}")
+        print(f"Database error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
