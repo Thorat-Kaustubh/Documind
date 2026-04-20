@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import logging
 from typing import Dict, Any, Optional
-from backend.ai_broker import AIBroker
+from backend.src.execution.llm_engine import LLMEngine
 
 logger = logging.getLogger("documind.screener")
 
@@ -18,7 +18,7 @@ class ScreenerAgent:
     - Zero-Emoji & Minimal Prompt logic for <50ms Token-to-First-Token (TTFT).
     """
     def __init__(self):
-        self.broker = AIBroker()
+        self.llm_engine = LLMEngine()
         self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36"}
 
     async def get_full_financials(self, ticker: str) -> Dict[str, Any]:
@@ -42,9 +42,10 @@ class ScreenerAgent:
                             if element:
                                 content += f"\n\n--- {sel} ---\n{element.get_text(separator=' ', strip=True)}"
                         
-                        return await self.broker.targeted_extraction(
-                            ticker=ticker,
-                            raw_dom=content
+                        return await self.llm_engine.generate_response(
+                            task=f"Extract fundamental metrics and financial health summary for {ticker}.",
+                            context=content,
+                            mode="fast"
                         )
         except Exception as e:
             logger.debug(f"Fast-Path blocked or error: {str(e)[:40]}")
@@ -74,9 +75,10 @@ class ScreenerAgent:
                     return results;
                 }""")
                 await browser.close()
-                return await self.broker.targeted_extraction(
-                    ticker=ticker,
-                    raw_dom=combined_html
+                return await self.llm_engine.generate_response(
+                    task=f"Extract fundamental metrics and financial health summary for {ticker}.",
+                    context=combined_html,
+                    mode="fast"
                 )
             except Exception as e:
                 await browser.close()

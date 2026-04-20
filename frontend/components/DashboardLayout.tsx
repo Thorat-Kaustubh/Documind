@@ -14,15 +14,30 @@ import {
   ChevronLeft
 } from "lucide-react";
 import { useEffect } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { isSidebarOpen, toggleSidebar, activeTab, setActiveTab, notifications } = useUIStore();
-  const { user, initialize, signOut } = useAuthStore();
+  const { user, isLoading, initialize, signOut } = useAuthStore();
+  const router = useRouter();
 
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      router.push("/login");
+    }
+  }, [isLoading, user, router]);
+
+  if (isLoading) {
+    return <div className="h-screen w-screen flex items-center justify-center bg-background text-foreground">Initializing session...</div>;
+  }
+
+  if (!user) {
+    return null;
+  }
 
   const menuItems = [
     { id: "dashboard", icon: <BarChart2 size={20} />, label: "Pulse" },

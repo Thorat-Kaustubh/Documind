@@ -14,10 +14,13 @@ market_engine = MarketDataEngine()
 vector_db = VectorStorage()
 from database.postgres_sync import PostgresSync
 pg_db = PostgresSync()
-from .ai_broker import AIBroker
-broker = AIBroker()
+from backend.src.execution.llm_engine import LLMEngine
+llm_engine = LLMEngine()
 from .services.data_update.queue import QueueManager
 queue = QueueManager()
+
+from scraping_hub.regulator_scout import RegulatorScout
+from scraping_hub.screener_agent import ScreenerAgent
 
 @celery_app.task(name="tasks.process_pdf_task", autoretry_for=(Exception,), retry_kwargs={'max_retries': 3, 'countdown': 30})
 def process_pdf_task(symbol: str, pdf_url: str, is_local: bool = False, user_id: str = None):
@@ -51,10 +54,10 @@ def discovery_sweep_task(ticker_list: list):
             market_stats = market_engine.fetch_equity_intelligence(ticker)
             
             # 3. AI Sentiment & Summary Generation (The 'Neural Reasoning' Layer)
-            intelligence = await broker.execute_task(
-                f"Analyze the context for {ticker}. Extraction focused.",
-                provider_mode="grounding",
-                raw_context=str(web_context.get('results', []))
+            intelligence = await llm_engine.generate_response(
+                task=f"Analyze the context for {ticker}. Extraction focused.",
+                mode="deep",
+                context=str(web_context.get('results', []))
             )
             
             summary_text = intelligence.get('summary', '')
@@ -112,10 +115,10 @@ def ipo_discovery_task():
     ipo_intel = web_intel.tavily_client.search(query="upcoming IPOs in India 2024 listed schedule news", search_depth="advanced")
     
     async def summarize_ipos():
-        summary = await broker.execute_task(
-            "Extract a list of upcoming IPOs from this context. Include company names and status. Return as a structural list.",
-            provider_mode="grounding",
-            raw_context=str(ipo_intel)
+        summary = await llm_engine.generate_response(
+            task="Extract a list of upcoming IPOs from this context. Include company names and status. Return as a structural list.",
+            mode="deep",
+            context=str(ipo_intel)
         )
         
         # In the consolidated schema, the model already handles ticker/entity extraction
@@ -157,10 +160,10 @@ def sector_discovery_task(sector: str):
     sector_intel = web_intel.tavily_client.search(query=query, search_depth="advanced", max_results=10)
     
     async def synthesize():
-        res = await broker.execute_task(
-            f"Summarize the current state of the {sector} sector.",
-            provider_mode="grounding",
-            raw_context=str(sector_intel.get('results', []))
+        res = await llm_engine.generate_response(
+            task=f"Summarize the current state of the {sector} sector.",
+            mode="deep",
+            context=str(sector_intel.get('results', []))
         )
         vector_db.upsert_document(
             text=f"SECTOR REPORT [{sector}]: {res.get('summary')}",
@@ -215,3 +218,41 @@ def sentiment_trigger_engine():
             alerts_fired += 1
 
     return {"status": "scan_complete", "alerts_fired": alerts_fired}
+
+@celery_app.task(name="tasks.regulatory_scout")
+def regulatory_scout_task(symbol: str):
+    """
+    Scrapes BSE filings and pushes them to the Intelligence Feed via the Queue.
+    """
+    print(f"🏛️ [CELERY-WORKER] Running Regulatory Scout for {symbol}...")
+    scout = RegulatorScout()
+    filings = asyncio.run(scout.get_latest_bse_filings(symbol))
+    
+    for filing in filings:
+        queue.publish_event("INTELLIGENCE_FEED", {
+            "ticker": symbol,
+            "title": filing.get("title", "Regulatory Filing"),
+            "content": f"Filing document available at {filing.get('url')}",
+            "source": filing.get("source", "BSE_Scraper"),
+            "sentiment": 0.5, # Neutral by default until processed by Analyst
+            "category": "REGULATORY"
+        })
+    return {"status": "success", "filings_found": len(filings)}
+
+@celery_app.task(name="tasks.deep_financial_scan")
+def deep_financial_scan_task(symbol: str):
+    """
+    Scrapes Screener.in and pushes fundamental data to the Data Update Microservice.
+    """
+    print(f"📈 [CELERY-WORKER] Running Deep Financial Scan for {symbol}...")
+    agent = ScreenerAgent()
+    data = asyncio.run(agent.get_full_financials(symbol))
+    
+    queue.publish_event("FINANCIAL_SNAPSHOT", {
+        "ticker": symbol,
+        "fiscal_year": datetime.now().year,
+        "quarter": "Current",
+        "raw_json": data
+    })
+    return {"status": "success", "symbol": symbol}
+

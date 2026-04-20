@@ -6,6 +6,7 @@ import { Button, Card, Input, Badge } from "@/components/ui/core";
 import { Shield, Mail, Lock, Ghost, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/api/client";
 
 export default function LoginPage() {
@@ -13,6 +14,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,7 +25,7 @@ export default function LoginPage() {
       setError(error.message);
       setIsLoading(false);
     } else {
-      window.location.href = "/dashboard";
+      router.push("/dashboard");
     }
   };
 

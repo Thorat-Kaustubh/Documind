@@ -46,6 +46,17 @@ class AgentSwarm:
         is_verified = critic_review.get("is_verified", True)
         critic_note = critic_review.get("corrections", "Data verification recommended.") if not is_verified else ""
         
+        # Run Hallucination Guard
+        calculated_confidence = HallucinationGuard.calculate_confidence(initial_analysis, context)
+        critic_llm_score = float(critic_review.get("critic_score", 0.8))
+        
+        # Final score is the lower of the LLM critic or the Heuristic Guard
+        final_confidence = min(critic_llm_score, calculated_confidence)
+        
+        if final_confidence < 0.75:
+            is_verified = False
+            critic_note += f" [System Guard Flag: Low confidence ({final_confidence}). Potential hallucination detected.]"
+
         # Final response construction
         final_summary = initial_analysis.get("summary", "")
         if critic_note:
@@ -54,7 +65,7 @@ class AgentSwarm:
         return {
             "summary": final_summary,
             "intent": initial_analysis.get("intent", "ANALYZE"),
-            "confidence": critic_review.get("critic_score", 0.5),
+            "confidence": final_confidence,
             "entities": initial_analysis.get("entities", {}),
             "execution_plan": initial_analysis.get("execution_plan", []),
             "metadata": {
@@ -65,16 +76,47 @@ class AgentSwarm:
             }
         }
 
+import re
+
 class HallucinationGuard:
     """
     Specific utility for source validation (Section 12.2).
     """
     @staticmethod
     def calculate_confidence(response: Dict[str, Any], context: str) -> float:
-        # Heuristic: Check if keywords in summary exist in context
-        summary = str(response.get("summary", "")).lower()
+        # Heuristic: Check if keywords and numbers in summary exist in context
+        summary = str(response.get("summary", ""))
+        if not summary or not context: return 0.5
+        
         context_low = context.lower()
         
-        # Simple overlap check for demonstration
-        # In production, use cross-encoder or NLI (Natural Language Inference)
-        return 0.95 # Optimistic placeholder
+        # 1. Extract exact numbers, percentages, and dollar amounts (e.g., $10M, 15%, 2024)
+        numbers = set(re.findall(r'\$?\d+(?:\.\d+)?[a-zA-Z%]*', summary))
+        
+        # 2. Extract capitalized phrases (Potential Entities)
+        entities = set(re.findall(r'\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b', summary))
+        
+        total_checks = len(numbers) + len(entities)
+        if total_checks == 0:
+            return 0.90 # High confidence if no specific factual claims are made
+
+        hits = 0
+        
+        for num in numbers:
+            if num.lower() in context_low:
+                hits += 1
+            else:
+                logger.warning(f"Hallucination Guard: Metric '{num}' not found in context.")
+
+        for ent in entities:
+            if ent.lower() in context_low:
+                hits += 1
+            else:
+                logger.warning(f"Hallucination Guard: Entity '{ent}' not found in context.")
+
+        confidence_score = hits / total_checks
+        
+        # Scale to a 0.4 - 1.0 range (we don't drop to 0 for just rephrasing)
+        normalized_confidence = 0.4 + (confidence_score * 0.6)
+        
+        return round(normalized_confidence, 2)

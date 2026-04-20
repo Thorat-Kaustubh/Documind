@@ -5,7 +5,7 @@ import httpx
 import time
 import asyncio
 from typing import Dict, Any, List, Optional
-from backend.ai_broker import AIBroker
+from backend.src.execution.llm_engine import LLMEngine
 from database.vector_storage import VectorStorage
 
 class PDFIntelligenceEngine:
@@ -15,7 +15,7 @@ class PDFIntelligenceEngine:
     """
     def __init__(self):
         self.vector_db = VectorStorage(collection_name="pdf_intelligence")
-        self.broker = AIBroker()
+        self.llm_engine = LLMEngine()
         self.temp_dir = "temp_pdfs"
         os.makedirs(self.temp_dir, exist_ok=True)
         
@@ -110,11 +110,10 @@ class PDFIntelligenceEngine:
         context = "\n\n".join(results['documents'][0]) if results['documents'] else ""
         
         # 2. SYNTHESIZE
-        return await self.broker.execute_task(
+        return await self.llm_engine.generate_response(
             task=query,
-            provider_mode="deep", # Routing to Gemini
-            raw_context=context,
-            ticker=symbol
+            mode="deep", # Routing to Gemini
+            context=context
         )
 
     def _trigger_fallback(self, error_code: str, reason: str) -> Dict[str, Any]:

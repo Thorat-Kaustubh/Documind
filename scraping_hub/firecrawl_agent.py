@@ -3,7 +3,7 @@ import httpx
 import json
 import asyncio
 from typing import Optional, Dict, Any, List
-from backend.ai_broker import AIBroker
+from backend.src.execution.llm_engine import LLMEngine
 
 class FirecrawlAgent:
     """
@@ -17,7 +17,7 @@ class FirecrawlAgent:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        self.broker = AIBroker()
+        self.llm_engine = LLMEngine()
         
         # Load the "Fidelity First" rules
         prompt_path = os.path.join(os.path.dirname(__file__), "firecrawl_system_prompt.txt")
@@ -64,11 +64,11 @@ class FirecrawlAgent:
                 
                 # We use the system prompt provided in 'firecrawl_system_prompt.txt'
                 # The AI Broker will process the clean markdown into the required JSON.
-                intelligence = await self.broker.execute_task(
+                intelligence = await self.llm_engine.generate_response(
                     task=f"EXTRACTION GOAL: {goal}. SOURCE TYPE: {source_type}. URL: {url}",
-                    provider_mode="core",
-                    raw_context=markdown,
-                    custom_system_prompt=self.system_prompt
+                    mode="core",
+                    context=markdown,
+                    system_prompt=self.system_prompt
                 )
 
                 # Step 4: Validate and return structured output

@@ -38,6 +38,18 @@ class IntentVerificationLayer:
                     verification_method="rule_based"
                 )
 
+        # 2.5 Entity-Aware Consistency Check (Suggestion 1)
+        if classification.predicted_intent == IntentType.FINANCIAL_EXTRACTION:
+            financial_terms = ["revenue", "ebitda", "profit", "margin", "income", "balance", "cash", "metrics", "numbers", "financials", "extract", "growth"]
+            if not any(term in query.lower() for term in financial_terms):
+                logger.warning(f"Heuristic mismatch for FINANCIAL_EXTRACTION. Downgrading to GENERAL_QUERY.")
+                return VerificationResult(
+                    is_verified=False,
+                    final_intent=IntentType.GENERAL_QUERY,
+                    verification_method="heuristic_cross_check",
+                    notes="Downgraded to GENERAL_QUERY due to missing financial terms."
+                )
+
         # 3. LLM-Based Verification (The Deep Fallback - Gemini)
         logger.info(f"Triggering LLM Fallback verification for query: {query}")
         try:

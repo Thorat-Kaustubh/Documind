@@ -12,19 +12,27 @@ export function Watchlist() {
   const [newStock, setNewStock] = useState("");
   const { watchlist, addToWatchlist, removeFromWatchlist } = useDashboardStore();
 
-  const { data: stockData, isLoading } = useQuery({
-    queryKey: ["watchlistData", watchlist],
-    queryFn: () => apiClient("/api/market/stocks", { 
-      method: "POST", 
-      body: JSON.stringify({ symbols: watchlist }) 
-    }),
-    enabled: watchlist.length > 0,
+  const { data: serverWatchlist, isLoading } = useQuery({
+    queryKey: ["watchlistData"],
+    queryFn: () => apiClient("/api/watchlist"),
   });
 
+  const displayWatchlist = Array.isArray(serverWatchlist) ? serverWatchlist : watchlist;
+
   const addMutation = useMutation({
-    mutationFn: (symbol: string) => apiClient("/api/watchlist/add", {
+    mutationFn: (symbol: string) => apiClient("/api/watchlist", {
       method: "POST",
-      body: JSON.stringify({ symbol })
+      body: JSON.stringify({ ticker: symbol, action: "ADD" })
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["watchlistData"] });
+    }
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (symbol: string) => apiClient("/api/watchlist", {
+      method: "POST",
+      body: JSON.stringify({ ticker: symbol, action: "REMOVE" })
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["watchlistData"] });
@@ -34,8 +42,13 @@ export function Watchlist() {
   const handleAdd = () => {
     if (!newStock) return;
     addToWatchlist(newStock.toUpperCase());
+    addMutation.mutate(newStock.toUpperCase());
     setNewStock("");
-    // addMutation.mutate(newStock.toUpperCase());
+  };
+
+  const handleRemove = (symbol: string) => {
+    removeFromWatchlist(symbol);
+    removeMutation.mutate(symbol);
   };
 
   return (
@@ -44,7 +57,7 @@ export function Watchlist() {
         <h3 className="font-bold flex items-center gap-2">
           <TrendingUp size={18} className="text-primary" /> My Watchlist
         </h3>
-        <Badge variant="outline">{watchlist.length} Assets</Badge>
+        <Badge variant="outline">{displayWatchlist.length} Assets</Badge>
       </div>
 
       <div className="p-4 border-b border-border/50">
@@ -62,8 +75,11 @@ export function Watchlist() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {watchlist.map((symbol) => {
-          const data = stockData?.[symbol] || { price: 150.00 + Math.random() * 50, change: (Math.random() * 4 - 2).toFixed(2) };
+        {displayWatchlist.map((symbolObj: any) => {
+          const symbol = typeof symbolObj === 'string' ? symbolObj : symbolObj.ticker || symbolObj.symbol;
+          if (!symbol) return null;
+          // Dummy data for visual flair since backend assets endpoint doesn't return live prices yet
+          const data = { price: 150.00 + Math.random() * 50, change: (Math.random() * 4 - 2).toFixed(2) };
           const isUp = parseFloat(data.change) >= 0;
 
           return (
@@ -88,7 +104,7 @@ export function Watchlist() {
                   </div>
                 </div>
                 <button 
-                  onClick={() => removeFromWatchlist(symbol)}
+                  onClick={() => handleRemove(symbol)}
                   className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-400/20 text-muted-foreground hover:text-red-400 rounded-lg transition-all"
                 >
                   <Trash2 size={14} />

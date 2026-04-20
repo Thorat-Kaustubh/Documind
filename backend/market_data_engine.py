@@ -62,7 +62,16 @@ class MarketDataEngine:
             }
             
             # Save to hard metrics and cache
-            self.db.insert_market_quote(symbol, metrics['price'], metrics['change_pct'], metrics['volume'], str(metrics['market_cap']))
+            # V2 Architecture: Use Event-Driven Microservice
+            from backend.services.data_update.queue import QueueManager
+            QueueManager().publish_event("MARKET_QUOTE", {
+                "ticker": symbol,
+                "price": metrics['price'],
+                "change_pct": metrics['change_pct'],
+                "volume": metrics['volume'],
+                "market_cap": str(metrics['market_cap'])
+            })
+            
             self._set_cache(symbol, metrics)
             return metrics
         except Exception as e:

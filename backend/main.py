@@ -165,6 +165,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus Metrics Export
+try:
+    from prometheus_client import make_asgi_app
+    app.mount("/metrics", make_asgi_app())
+except ImportError:
+    pass
+
 # 3. GLOBAL EXCEPTION HANDLER (Hardening)
 # 4. CENTRALIZED AUTH MIDDLEWARE (Section 6.2)
 @app.middleware("http")

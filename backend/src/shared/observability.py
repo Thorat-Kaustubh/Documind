@@ -3,6 +3,17 @@ import logging
 from typing import Dict, Any, Optional
 from backend.src.shared.performance import PerformanceOptimizer
 
+try:
+    from prometheus_client import Counter, Histogram
+    
+    QUERY_LATENCY = Histogram('documind_query_latency_seconds', 'Time spent processing queries', ['model', 'intent'])
+    QUERY_COST = Counter('documind_query_cost_dollars', 'Estimated cost of LLM queries', ['model'])
+    QUERY_ERRORS = Counter('documind_query_errors_total', 'Number of failed queries', ['model'])
+    QUERY_COUNT = Counter('documind_query_total', 'Total number of queries', ['model'])
+    HAS_PROMETHEUS = True
+except ImportError:
+    HAS_PROMETHEUS = False
+
 logger = logging.getLogger("documind.observability")
 
 class ObservabilityManager:
@@ -39,13 +50,22 @@ class ObservabilityManager:
         output_tokens = len(str(response.get("summary", ""))) // 4
         
         cost = self.optimizer.calculate_cost(model, input_tokens, output_tokens)
+        has_error = 1 if "error" in response else 0
+        intent = response.get("intent", "UNKNOWN")
+        
+        if HAS_PROMETHEUS:
+            QUERY_COUNT.labels(model=model).inc()
+            QUERY_LATENCY.labels(model=model, intent=intent).observe(total_latency)
+            QUERY_COST.labels(model=model).inc(cost)
+            if has_error:
+                QUERY_ERRORS.labels(model=model).inc()
         
         report = {
             "query": trace["query"],
             "latency": total_latency,
             "cost": cost,
             "model": model,
-            "error_rate": 1 if "error" in response else 0,
+            "error_rate": has_error,
             "steps_count": len(trace["steps"])
         }
         

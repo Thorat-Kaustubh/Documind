@@ -3,7 +3,7 @@ import os
 import time
 from datetime import datetime
 from scraping_hub.firecrawl_scout import FirecrawlScout
-from ai_broker import AIBroker
+from backend.src.execution.llm_engine import LLMEngine
 from database.vector_storage import VectorStorage
 from database.postgres_sync import PostgresSync
 from web_intelligence import WebIntelligence
@@ -17,7 +17,7 @@ class DocumindKnowledgeGraph:
     """
     def __init__(self):
         self.scout = FirecrawlScout()
-        self.broker = AIBroker()
+        self.llm_engine = LLMEngine()
         self.vector_db = VectorStorage()
         self.pg_db = PostgresSync()
         self.web_intel = WebIntelligence()
@@ -109,10 +109,10 @@ class DocumindKnowledgeGraph:
     async def _scout_upcoming_ipos(self):
         """Tavily-driven IPO discovery with Intelligent Upsert"""
         ipo_intel = self.web_intel.tavily.search(query="upcoming IPOs in India 2024 listed schedule news", search_depth="advanced")
-        summary = await self.broker.execute_task(
-            "Summarize upcoming IPOs with expected dates and valuation hints.",
-            provider_mode="scout",
-            raw_context=str(ipo_intel)
+        summary = await self.llm_engine.generate_response(
+            task="Summarize upcoming IPOs with expected dates and valuation hints.",
+            mode="fast",
+            context=str(ipo_intel)
         )
         self.vector_db.upsert_document(
             text=summary.get("summary", ""),

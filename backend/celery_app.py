@@ -1,5 +1,6 @@
 import os
 from celery import Celery
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -67,6 +68,18 @@ celery_app.conf.beat_schedule = {
     "sentiment-trigger-monitor": {
         "task": "tasks.sentiment_trigger_engine",
         "schedule": 900.0, # Every 15 minutes
+    },
+    "daily-regulatory-scout": {
+        "task": "tasks.regulatory_scout",
+        # Runs every day at 18:00 UTC (around market close)
+        "schedule": crontab(hour=18, minute=0),
+        "args": ("RELIANCE",),
+    },
+    "daily-financial-scan": {
+        "task": "tasks.deep_financial_scan",
+        # Runs every day at 02:00 UTC (off-peak hours)
+        "schedule": crontab(hour=2, minute=0),
+        "args": ("RELIANCE",),
     },
 }
 

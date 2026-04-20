@@ -17,16 +17,16 @@ import {
 import { TrendingUp, TrendingDown, Clock } from "lucide-react";
 
 export function MarketPulse() {
-  const { data: pulse, isLoading } = useQuery({
-    queryKey: ["marketPulse"],
-    queryFn: () => apiClient("/api/market/pulse"),
+  const { data: vitals, isLoading } = useQuery({
+    queryKey: ["marketVitals"],
+    queryFn: () => apiClient("/api/market-vitals"),
     refetchInterval: 10000, // Refresh every 10 seconds
   });
 
   if (isLoading) return <MarketPulseSkeleton />;
 
-  // Mock data if API is not yet ready or returns null
-  const chartData = pulse?.history || [
+  // Mock chart history since /api/market-vitals returns current snapshot
+  const chartData = [
     { time: "09:00", value: 5000 },
     { time: "10:00", value: 5200 },
     { time: "11:00", value: 5100 },
@@ -47,9 +47,9 @@ export function MarketPulse() {
             </p>
           </div>
           <div className="text-right">
-            <span className="text-2xl font-bold text-primary">$5,820.42</span>
+            <span className="text-2xl font-bold text-primary">{vitals?.nifty ? `NIFTY ${vitals.nifty}` : "$5,820.42"}</span>
             <div className="flex items-center gap-1 text-green-500 text-sm font-medium justify-end">
-              <TrendingUp size={16} /> +1.24%
+              <TrendingUp size={16} /> {vitals?.repo_rate ? `Repo: ${vitals.repo_rate}` : "+1.24%"}
             </div>
           </div>
         </div>
